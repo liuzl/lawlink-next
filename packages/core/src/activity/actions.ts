@@ -58,6 +58,12 @@ export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) 
     createdById: auth.userId,
     createdAt: deps.clock.now(),
   });
+  await deps.audit.record(auth, {
+    action: "TASK_CREATE",
+    targetType: "Task",
+    targetId: id,
+    detail: { matterId: input.matterId, hasDueAt: input.dueAt !== undefined },
+  });
   return { id, title: input.title };
 }
 
@@ -79,6 +85,12 @@ export async function completeTask(deps: Deps, auth: AuthContext, rawInput: unkn
   if (!t) throw new DomainError("NOT_FOUND", "任务不存在");
   await assertMatterWritable(deps.db, auth, t.matterId);
   await deps.db.update(tasks).set({ completed: true, completedAt: deps.clock.now() }).where(eq(tasks.id, taskId));
+  await deps.audit.record(auth, {
+    action: "TASK_COMPLETE",
+    targetType: "Task",
+    targetId: taskId,
+    detail: { matterId: t.matterId },
+  });
   return { id: taskId, completed: true };
 }
 
@@ -106,6 +118,13 @@ export async function addNote(deps: Deps, auth: AuthContext, rawInput: unknown) 
     occurredAt: input.occurredAt ?? now,
     content: input.content,
     createdAt: now,
+  });
+  // Note content is privileged free text — record only the channel, never the body.
+  await deps.audit.record(auth, {
+    action: "NOTE_CREATE",
+    targetType: "Note",
+    targetId: id,
+    detail: { matterId: input.matterId, channel: input.channel },
   });
   return { id };
 }
@@ -145,6 +164,12 @@ export async function addHearing(deps: Deps, auth: AuthContext, rawInput: unknow
     endsAt: null,
     notes: null,
     createdAt: deps.clock.now(),
+  });
+  await deps.audit.record(auth, {
+    action: "HEARING_CREATE",
+    targetType: "Hearing",
+    targetId: id,
+    detail: { matterId, procedureId: input.procedureId, startsAt: input.startsAt.toISOString() },
   });
   return { id, startsAt: input.startsAt };
 }

@@ -40,6 +40,14 @@ export async function createClient(deps: Deps, auth: AuthContext, rawInput: unkn
     createdAt: now,
     updatedAt: now,
   });
+  // Client name/idNumber are PII; audit records only the type + whether an
+  // idNumber was supplied, never the values.
+  await deps.audit.record(auth, {
+    action: "CLIENT_CREATE",
+    targetType: "Client",
+    targetId: id,
+    detail: { type: input.type, hasIdNumber: input.idNumber !== undefined },
+  });
   return { id, name: input.name, type: input.type };
 }
 
@@ -98,6 +106,12 @@ export async function updateClient(deps: Deps, auth: AuthContext, rawInput: unkn
       updatedAt: deps.clock.now(),
     })
     .where(eq(clients.id, input.clientId));
+  await deps.audit.record(auth, {
+    action: "CLIENT_UPDATE",
+    targetType: "Client",
+    targetId: input.clientId,
+    detail: { fields: ["phone", "email", "address", "notes"] },
+  });
   return { id: input.clientId, updated: true };
 }
 
@@ -131,6 +145,12 @@ export async function addContact(deps: Deps, auth: AuthContext, rawInput: unknow
     isPrimary: input.isPrimary,
     notes: null,
     createdAt: deps.clock.now(),
+  });
+  await deps.audit.record(auth, {
+    action: "CONTACT_CREATE",
+    targetType: "Contact",
+    targetId: id,
+    detail: { clientId: input.clientId, isPrimary: input.isPrimary },
   });
   return { id, name: input.name };
 }

@@ -155,7 +155,7 @@ app.get("/api/intakes", requireAuth, async (c) => {
 
 app.post("/api/intakes", requireAuth, async (c) => {
   try {
-    return c.json(await createIntake(buildDeps(), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createIntake(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -188,7 +188,7 @@ app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
 
 app.post("/api/conflicts/check", requireAuth, async (c) => {
   try {
-    return c.json(await runConflictCheck(buildDeps(), c.get("auth"), await c.req.json()));
+    return c.json(await runConflictCheck(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -204,7 +204,7 @@ app.get("/api/clients", requireAuth, async (c) => {
 
 app.post("/api/clients", requireAuth, async (c) => {
   try {
-    return c.json(await createClient(buildDeps(), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createClient(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -221,7 +221,7 @@ app.get("/api/clients/:id", requireAuth, async (c) => {
 app.post("/api/clients/:id/contacts", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addContact(buildDeps(), c.get("auth"), { ...body, clientId: c.req.param("id") }), 201);
+    return c.json(await addContact(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, clientId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -247,7 +247,7 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await addProcedure(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      await addProcedure(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -265,14 +265,14 @@ app.get("/api/matters/:id/tasks", requireAuth, async (c) => {
 app.post("/api/matters/:id/tasks", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addTask(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await addTask(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/tasks/:id/complete", requireAuth, async (c) => {
   try {
-    return c.json(await completeTask(buildDeps(), c.get("auth"), { taskId: c.req.param("id") }));
+    return c.json(await completeTask(buildDeps("", auditCtx(c)), c.get("auth"), { taskId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -288,7 +288,7 @@ app.get("/api/matters/:id/notes", requireAuth, async (c) => {
 app.post("/api/matters/:id/notes", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addNote(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await addNote(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -304,7 +304,7 @@ app.get("/api/matters/:id/hearings", requireAuth, async (c) => {
 app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addHearing(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
+    return c.json(await addHearing(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -369,7 +369,7 @@ app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await applyDeadlineRules(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }),
+      await applyDeadlineRules(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -379,7 +379,7 @@ app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
 
 app.post("/api/deadlines/:id/complete", requireAuth, async (c) => {
   try {
-    return c.json(await completeDeadline(buildDeps(), c.get("auth"), { deadlineId: c.req.param("id") }));
+    return c.json(await completeDeadline(buildDeps("", auditCtx(c)), c.get("auth"), { deadlineId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -397,7 +397,7 @@ app.post("/api/matters/:id/preservations", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await createPreservation(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      await createPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -409,7 +409,7 @@ app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await renewPreservation(buildDeps(), c.get("auth"), { ...body, preservationId: c.req.param("id") }),
+      await renewPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, preservationId: c.req.param("id") }),
     );
   } catch (err) {
     return fail(c, err);
@@ -418,7 +418,7 @@ app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
 
 app.post("/api/preservations/:id/lift", requireAuth, async (c) => {
   try {
-    return c.json(await liftPreservation(buildDeps(), c.get("auth"), { preservationId: c.req.param("id") }));
+    return c.json(await liftPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { preservationId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

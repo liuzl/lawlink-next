@@ -111,8 +111,9 @@ export async function runConflictCheck(
     };
   });
 
+  const checkId = deps.ids.newId();
   await deps.db.insert(conflictChecks).values({
-    id: deps.ids.newId(),
+    id: checkId,
     intakeId: input.intakeId ?? null,
     queryName: input.name ?? null,
     queryIdNumber: input.idNumber ?? null,
@@ -121,6 +122,15 @@ export async function runConflictCheck(
     hitCount: hits.length,
     checkedById: auth.userId,
     createdAt: deps.clock.now(),
+  });
+
+  // The conflictChecks row holds the full (sensitive) query; the audit entry
+  // records only the outcome so the compliance lens stays PII-free.
+  await deps.audit.record(auth, {
+    action: "CONFLICT_CHECK",
+    targetType: "ConflictCheck",
+    targetId: checkId,
+    detail: { intakeId: input.intakeId ?? null, topSeverity: top, hitCount: hits.length },
   });
 
   return { topSeverity: top, hitCount: hits.length, hits };

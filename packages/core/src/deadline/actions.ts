@@ -59,7 +59,7 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
   const input = ApplyDeadlineRulesInput.parse(rawInput);
   const now = deps.clock.now();
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const { matterId, category } = await authorizedMatterOfProcedure(tx, auth, input.procedureId);
     const computed = computeDeadlines(category, input.event as DeadlineEvent, input.eventDate);
 
@@ -115,8 +115,21 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
       ),
     );
 
-    return { procedureId: input.procedureId, event: input.event, created: computed.length, deadlines: computed };
+    return { procedureId: input.procedureId, matterId, event: input.event, created: computed.length, deadlines: computed };
   });
+
+  await deps.audit.record(auth, {
+    action: "DEADLINE_RULES_APPLY",
+    targetType: "Procedure",
+    targetId: result.procedureId,
+    detail: {
+      matterId: result.matterId,
+      event: result.event,
+      eventDate: input.eventDate.toISOString(),
+      created: result.created,
+    },
+  });
+  return result;
 }
 
 export const AddDeadlineInput = z.object({
@@ -146,6 +159,12 @@ export async function addDeadline(deps: Deps, auth: AuthContext, rawInput: unkno
     autoComputed: false,
     completed: false,
     createdAt: deps.clock.now(),
+  });
+  await deps.audit.record(auth, {
+    action: "DEADLINE_CREATE",
+    targetType: "Deadline",
+    targetId: id,
+    detail: { matterId, procedureId: input.procedureId, category: input.category, dueAt: input.dueAt.toISOString() },
   });
   return { id, title: input.title, dueAt: input.dueAt };
 }
@@ -202,5 +221,11 @@ export async function completeDeadline(deps: Deps, auth: AuthContext, rawInput: 
     .update(deadlines)
     .set({ completed: true, completedAt: deps.clock.now() })
     .where(eq(deadlines.id, deadlineId));
+  await deps.audit.record(auth, {
+    action: "DEADLINE_COMPLETE",
+    targetType: "Deadline",
+    targetId: deadlineId,
+    detail: { matterId: dl.matterId },
+  });
   return { id: deadlineId, completed: true };
 }

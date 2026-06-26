@@ -1,4 +1,5 @@
 /** Audit sink factory + a no-op for tests/contexts without auditing. */
+import { z } from "zod";
 import { desc, eq } from "drizzle-orm";
 import { auditLogs } from "@lawlink/db";
 import {
@@ -32,8 +33,20 @@ export function createAuditSink(
           userAgent: ctx?.userAgent ?? null,
           createdAt: clock.now(),
         });
-      } catch {
-        /* best-effort: auditing failures must not break the operation */
+      } catch (err) {
+        // Best-effort: auditing failures must not break (or roll back) the
+        // operation — but they must not be invisible either. A silently empty
+        // audit trail is itself a compliance failure, so emit a structured
+        // signal operators can alert/count on.
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "audit.record.failed",
+            action: entry.action,
+            actorId: actor.userId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
       }
     },
   };
@@ -42,6 +55,13 @@ export function createAuditSink(
 /** A sink that records nothing (tests / non-audited contexts). */
 export const noopAuditSink: AuditSink = { async record() {} };
 
+/** Validate listing params: coerce + clamp limit to a finite [1, 500] so a
+ * negative/NaN value can't ride SQLite's "negative LIMIT = unbounded" quirk. */
+export const ListAuditInput = z.object({
+  action: z.string().min(1).max(64).optional(),
+  limit: z.coerce.number().int().min(1).max(500).catch(100),
+});
+
 /** List recent audit entries (ADMIN only — audit lens, DOMAIN-SPEC §7). */
 export async function listAudit(
   deps: Deps,
@@ -49,8 +69,8 @@ export async function listAudit(
   rawInput?: { action?: string; limit?: number },
 ) {
   requireRole(auth, "ADMIN");
-  const limit = Math.min(rawInput?.limit ?? 100, 500);
-  const where = rawInput?.action ? eq(auditLogs.action, rawInput.action) : undefined;
+  const { action, limit } = ListAuditInput.parse(rawInput ?? {});
+  const where = action ? eq(auditLogs.action, action) : undefined;
   return await deps.db
     .select()
     .from(auditLogs)

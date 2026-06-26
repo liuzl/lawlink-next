@@ -57,6 +57,12 @@ export async function createPreservation(deps: Deps, auth: AuthContext, rawInput
     ownerId: auth.userId,
     createdAt: deps.clock.now(),
   });
+  await deps.audit.record(auth, {
+    action: "PRESERVATION_CREATE",
+    targetType: "Preservation",
+    targetId: id,
+    detail: { matterId: input.matterId, type: input.type, propertyType: input.propertyType, durationDays },
+  });
   return { id, durationDays, expiryDate, status: "ACTIVE" as const };
 }
 
@@ -71,7 +77,7 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
   const input = RenewPreservationInput.parse(rawInput);
   const now = deps.clock.now();
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const [p] = await tx
       .select({ matterId: preservations.matterId, expiryDate: preservations.expiryDate, status: preservations.status })
       .from(preservations)
@@ -126,8 +132,26 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
       note: input.note ?? null,
     });
 
-    return { id: input.preservationId, newExpiryDate: input.newExpiryDate, status: "RENEWED" as const };
+    return {
+      id: input.preservationId,
+      matterId: p.matterId,
+      oldExpiryDate: p.expiryDate,
+      newExpiryDate: input.newExpiryDate,
+      status: "RENEWED" as const,
+    };
   });
+
+  await deps.audit.record(auth, {
+    action: "PRESERVATION_RENEW",
+    targetType: "Preservation",
+    targetId: result.id,
+    detail: {
+      matterId: result.matterId,
+      oldExpiryDate: result.oldExpiryDate.toISOString(),
+      newExpiryDate: result.newExpiryDate.toISOString(),
+    },
+  });
+  return { id: result.id, newExpiryDate: result.newExpiryDate, status: result.status };
 }
 
 export const LiftPreservationInput = z.object({ preservationId: z.string().min(1) });
@@ -145,6 +169,12 @@ export async function liftPreservation(deps: Deps, auth: AuthContext, rawInput: 
   await assertMatterWritable(deps.db, auth, p.matterId);
 
   await deps.db.update(preservations).set({ status: "LIFTED" }).where(eq(preservations.id, preservationId));
+  await deps.audit.record(auth, {
+    action: "PRESERVATION_LIFT",
+    targetType: "Preservation",
+    targetId: preservationId,
+    detail: { matterId: p.matterId },
+  });
   return { id: preservationId, status: "LIFTED" as const };
 }
 

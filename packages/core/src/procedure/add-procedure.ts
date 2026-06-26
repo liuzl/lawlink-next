@@ -29,7 +29,7 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
   const input = AddProcedureInput.parse(rawInput);
   const now = deps.clock.now();
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const [matter] = await tx
       .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
       .from(matters)
@@ -80,4 +80,12 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
 
     return { id, matterId: input.matterId, type: input.type, engagement: input.engagement, order };
   });
+
+  await deps.audit.record(auth, {
+    action: "PROCEDURE_CREATE",
+    targetType: "Procedure",
+    targetId: result.id,
+    detail: { matterId: result.matterId, type: result.type, engagement: result.engagement, order: result.order },
+  });
+  return result;
 }

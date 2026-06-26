@@ -97,5 +97,11 @@ export async function createIntake(
     await tx.insert(parties).values(partyRows);
   });
 
+  await deps.audit.record(auth, {
+    action: "INTAKE_CREATE",
+    targetType: "Intake",
+    targetId: intake.id,
+    detail: { category: intake.category, parties: partyRows.length },
+  });
   return intake;
 }

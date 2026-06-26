@@ -50,11 +50,15 @@ export async function declineIntake(
     );
   }
 
+  // Do NOT copy the free-text reason into the audit log: it can carry
+  // privileged case facts / PII, and audit rows have broad ADMIN visibility
+  // and long retention. Record only that a reason was given; the full text
+  // stays on the intake record under normal access controls.
   await deps.audit.record(auth, {
     action: "INTAKE_DECLINE",
     targetType: "Intake",
     targetId: intakeId,
-    detail: { reason },
+    detail: { hasReason: reason.length > 0 },
   });
   return { id: intakeId, status: "DECLINED", reason };
 }
