@@ -170,8 +170,12 @@ export function MatterDetail() {
   const [archiveSummary, setArchiveSummary] = useState("");
   const [archiveForceReason, setArchiveForceReason] = useState("");
   const [archiveError, setArchiveError] = useState<string | null>(null);
+  const [archiveLoadError, setArchiveLoadError] = useState<string | null>(null);
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
+  // Archived matters are read-only for case-body edits (§6.6) — finance stays
+  // editable, so finance controls keep using canEdit.
+  const canModifyMatter = canEdit && matter?.status !== "ARCHIVED";
 
   // Load on id change with a cancellation guard so a slower response from a
   // previous matter can't overwrite the current route; clear stale state first.
@@ -231,9 +235,12 @@ export function MatterDetail() {
     }).catch(() => {});
     setArchiveChecklist(null);
     setArchiveError(null);
+    setArchiveLoadError(null);
     api.getArchiveChecklist(id).then((c) => {
       if (active) setArchiveChecklist(c.required);
-    }).catch(() => {});
+    }).catch((err) => {
+      if (active) setArchiveLoadError(err instanceof Error ? err.message : String(err));
+    });
     return () => {
       active = false;
     };
@@ -273,7 +280,10 @@ export function MatterDetail() {
     } catch { /* ignore */ }
     try {
       setArchiveChecklist((await api.getArchiveChecklist(id)).required);
-    } catch { /* ignore */ }
+      setArchiveLoadError(null);
+    } catch (err) {
+      setArchiveLoadError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   async function doArchive() {
@@ -558,7 +568,7 @@ export function MatterDetail() {
             <p className="py-2 text-xs text-muted-foreground">尚无程序</p>
           )}
 
-          {canEdit && (
+          {canModifyMatter && (
             <form onSubmit={addProc} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>新增程序</Label>
@@ -629,7 +639,7 @@ export function MatterDetail() {
                     )}
                   </div>
                 </div>
-                {canEdit && !d.completed && (
+                {canModifyMatter && !d.completed && (
                   <Button variant="ghost" size="sm" onClick={() => completeDl(d.id)}>
                     <Check className="mr-1 h-3.5 w-3.5" /> 完成
                   </Button>
@@ -639,7 +649,7 @@ export function MatterDetail() {
           })}
           {deadlines.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无期限</p>}
 
-          {canEdit && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
+          {canModifyMatter && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
             <form onSubmit={computeDl} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>程序</Label>
@@ -719,7 +729,7 @@ export function MatterDetail() {
                       )}
                     </div>
                   </div>
-                  {canEdit && active && p.daysToExpiry >= 0 && (
+                  {canModifyMatter && active && p.daysToExpiry >= 0 && (
                     <Button
                       variant="ghost"
                       size="sm"
@@ -747,7 +757,7 @@ export function MatterDetail() {
             <p className="py-2 text-xs text-muted-foreground">尚无保全</p>
           )}
 
-          {canEdit && (
+          {canModifyMatter && (
             <form onSubmit={createPres} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>保全类型</Label>
@@ -819,7 +829,7 @@ export function MatterDetail() {
                   <span className="ml-2 text-xs text-muted-foreground">截止 {t.dueAt.slice(0, 10)}</span>
                 )}
               </div>
-              {canEdit && !t.completed && (
+              {canModifyMatter && !t.completed && (
                 <Button variant="ghost" size="sm" onClick={() => doCompleteTask(t.id)}>
                   <Check className="mr-1 h-3.5 w-3.5" /> 完成
                 </Button>
@@ -828,7 +838,7 @@ export function MatterDetail() {
           ))}
           {tasks.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无任务</p>}
 
-          {canEdit && (
+          {canModifyMatter && (
             <form onSubmit={addTask} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>任务</Label>
@@ -871,7 +881,7 @@ export function MatterDetail() {
           ))}
           {notes.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无沟通记录</p>}
 
-          {canEdit && (
+          {canModifyMatter && (
             <form onSubmit={addNote} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>方式</Label>
@@ -931,7 +941,7 @@ export function MatterDetail() {
           ))}
           {hearings.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无开庭</p>}
 
-          {canEdit && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
+          {canModifyMatter && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
             <form onSubmit={addHearing} className="flex flex-wrap items-end gap-3 pt-2">
               <div className="space-y-1.5">
                 <Label>程序</Label>
@@ -1138,6 +1148,24 @@ export function MatterDetail() {
               </div>
               {archiveError && <p className="text-xs text-destructive">{archiveError}</p>}
             </>
+          ) : canEdit && archiveLoadError ? (
+            <p className="text-xs text-destructive">
+              归档清单加载失败：{archiveLoadError}
+              <button
+                type="button"
+                className="ml-2 underline"
+                onClick={async () => {
+                  setArchiveLoadError(null);
+                  try {
+                    setArchiveChecklist((await api.getArchiveChecklist(id)).required);
+                  } catch (err) {
+                    setArchiveLoadError(err instanceof Error ? err.message : String(err));
+                  }
+                }}
+              >
+                重试
+              </button>
+            </p>
           ) : null}
         </CardContent>
       </Card>
