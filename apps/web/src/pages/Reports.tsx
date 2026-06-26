@@ -140,7 +140,7 @@ export function Reports() {
                 ].map(([label, val]) => (
                   <div key={label} className="flex items-center justify-between border-b border-border pb-1.5 last:border-0">
                     <span className="text-muted-foreground">{label}</span>
-                    <span className="ll-stat tabular">¥{yuan(val)}</span>
+                    <span className="ll-stat tabular">{yuan(val)}</span>
                   </div>
                 ))}
               </CardContent>
@@ -195,7 +195,7 @@ export function Reports() {
                     <TableRow key={l.userId}>
                       <TableCell className="font-medium">{l.name}</TableCell>
                       <TableCell className="text-right tabular">{l.activeOwned}</TableCell>
-                      <TableCell className="text-right tabular">¥{yuan(l.receivedInPeriod)}</TableCell>
+                      <TableCell className="text-right tabular">{yuan(l.receivedInPeriod)}</TableCell>
                     </TableRow>
                   ))}
                   {data.byLawyer.length === 0 && (
