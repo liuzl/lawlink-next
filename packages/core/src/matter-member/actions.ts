@@ -111,26 +111,31 @@ export async function setMatterTeam(deps: Deps, auth: AuthContext, rawInput: unk
   }
 
   const now = deps.clock.now();
-  await deps.db.transaction(async (tx) => {
-    // Re-check archived inside the txn (TOCTOU backstop), then rebuild the roster.
+  // Authoritative re-read INSIDE the txn: re-run authorization and the archived
+  // guard against the CURRENT row (the pre-txn checks above are just for early,
+  // friendly errors), and sync ownerId UNCONDITIONALLY. This closes the TOCTOU
+  // where ownership changes between precheck and commit — a stale owner can no
+  // longer rebuild the roster, and Matter.ownerId can never diverge from the LEAD
+  // member we insert here. SQLite's write lock makes the read+writes atomic vs
+  // other committed writers, so a concurrent owner change can't be lost.
+  const prevOwnerId = await deps.db.transaction(async (tx) => {
     const [cur] = await tx
-      .select({ status: matters.status })
+      .select({ ownerId: matters.ownerId, status: matters.status })
       .from(matters)
       .where(eq(matters.id, input.matterId))
       .limit(1);
     if (!cur) throw new DomainError("NOT_FOUND", "案件不存在");
+    if (!isManagement(auth) && cur.ownerId !== auth.userId) throw new DomainError("NOT_FOUND", "案件不存在");
     if (cur.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能调整团队");
 
     await tx.delete(matterMembers).where(eq(matterMembers.matterId, input.matterId));
-    const rows = [
+    await tx.insert(matterMembers).values([
       { id: deps.ids.newId(), matterId: input.matterId, userId: input.ownerId, role: "LEAD", joinedAt: now },
       ...coLeadIds.map((uid) => ({ id: deps.ids.newId(), matterId: input.matterId, userId: uid, role: "CO_LEAD", joinedAt: now })),
       ...assistantIds.map((uid) => ({ id: deps.ids.newId(), matterId: input.matterId, userId: uid, role: "ASSISTANT", joinedAt: now })),
-    ];
-    await tx.insert(matterMembers).values(rows);
-    if (m.ownerId !== input.ownerId) {
-      await tx.update(matters).set({ ownerId: input.ownerId }).where(eq(matters.id, input.matterId));
-    }
+    ]);
+    await tx.update(matters).set({ ownerId: input.ownerId }).where(eq(matters.id, input.matterId));
+    return cur.ownerId;
   });
 
   await deps.audit.record(auth, {
@@ -138,7 +143,7 @@ export async function setMatterTeam(deps: Deps, auth: AuthContext, rawInput: unk
     targetType: "Matter",
     targetId: input.matterId,
     detail: {
-      ownerChanged: m.ownerId !== input.ownerId,
+      ownerChanged: prevOwnerId !== input.ownerId,
       coLeads: coLeadIds.length,
       assistants: assistantIds.length,
     },
