@@ -1,8 +1,23 @@
-# Cloudflare Workers config for the API (wired up in P5).
+# Cloudflare Workers config — SINGLE ORIGIN: this Worker serves /api AND the
+# built SPA (via the static-assets binding below). One `wrangler deploy`, no
+# CORS, no separate static host.
+#
+# STATUS: the [assets] wiring is ready, but deploy is GATED on the P5 DB swap —
+# apps/api still uses libSQL via @lawlink/db's createDb() (Node), which does not
+# run on Workers; index.ts must switch to the D1 binding first. Until then ship
+# the Node single-origin server: `pnpm preview`.
 name = "lawlink-next-api"
 main = "src/index.ts"
 compatibility_date = "2026-06-01"
 compatibility_flags = ["nodejs_compat"]
+
+# Static SPA assets served by the platform; the Worker handles everything else.
+# SPA client routing: a path that isn't a built asset returns index.html so
+# react-router resolves it (e.g. /matters/:id on hard refresh). The Worker's
+# own `/api/*` routes (incl. its JSON 404) take precedence over the fallback.
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
 
 # D1 binding — fill database_id after `wrangler d1 create lawlink`.
 # [[d1_databases]]

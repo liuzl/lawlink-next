@@ -529,4 +529,11 @@ app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   }
 });
 
+// Unknown API routes return JSON 404 — registered AFTER all real /api routes so
+// it only catches misses. Crucially this also stops an unknown /api/* path from
+// falling through to the SPA static fallback (which would return index.html as
+// HTML). Non-API paths are left unmatched here so the Node entry (server.ts) can
+// serve the SPA; on Cloudflare the static-assets binding handles them instead.
+app.all("/api/*", (c) => c.json({ error: "接口不存在" }, 404));
+
 export default app;
