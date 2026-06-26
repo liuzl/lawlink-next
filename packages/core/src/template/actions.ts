@@ -77,28 +77,41 @@ function preScanZip(bytes: Uint8Array): void {
 
   let cdSize = dv.getUint32(eocd + 12, true);
   let cdOffset = dv.getUint32(eocd + 16, true);
+  // The central directory must end exactly where the EOCD (or, in Zip64, the
+  // Zip64 EOCD record) begins. Anything else means prepended bytes or a forged
+  // offset — and PizZip *normalizes* prepended bytes (extraBytes = eocd - cdEnd)
+  // so it would still load every record from a shifted offset. We reject the
+  // mismatch outright rather than chase PizZip's offset arithmetic.
+  let cdEndExpected = eocd;
   // Zip64: any maxed-out 16/32-bit field → read the authoritative 64-bit values.
   if (cdSize === 0xffffffff || cdOffset === 0xffffffff || dv.getUint16(eocd + 10, true) === 0xffff) {
     const locOff = eocd - 20;
-    if (locOff >= 0 && dv.getUint32(locOff, true) === 0x07064b50) {
-      const z64 = Number(dv.getBigUint64(locOff + 8, true));
-      if (z64 >= 0 && z64 + 56 <= n && dv.getUint32(z64, true) === 0x06064b50) {
-        cdSize = Number(dv.getBigUint64(z64 + 40, true));
-        cdOffset = Number(dv.getBigUint64(z64 + 48, true));
-      }
+    if (locOff < 0 || dv.getUint32(locOff, true) !== 0x07064b50) {
+      throw new DomainError("VALIDATION", "docx 目录区异常");
     }
+    const z64 = Number(dv.getBigUint64(locOff + 8, true));
+    if (z64 < 0 || z64 + 56 > n || dv.getUint32(z64, true) !== 0x06064b50) {
+      throw new DomainError("VALIDATION", "docx 目录区异常");
+    }
+    cdSize = Number(dv.getBigUint64(z64 + 40, true));
+    cdOffset = Number(dv.getBigUint64(z64 + 48, true));
+    cdEndExpected = z64; // CD must immediately precede the Zip64 EOCD record
   }
-  if (cdOffset < 0 || cdOffset > eocd || cdSize > MAX_CENTRAL_DIR_BYTES) {
+  if (
+    cdOffset < 0 ||
+    cdSize > MAX_CENTRAL_DIR_BYTES ||
+    cdOffset + cdSize !== cdEndExpected // adjacency: no prefix / no forged offset
+  ) {
     throw new DomainError("VALIDATION", "docx 目录区异常");
   }
 
-  // Authoritative scan: count real central-file-header records, walking each by
-  // its declared lengths, bounded by [cdOffset, eocd). We never trust cdSize to
-  // shrink the window. Each record advances pos by ≥ 46, and we throw at the cap,
-  // so this loops at most MAX_ARCHIVE_ENTRIES + 1 times regardless of forged data.
+  // Authoritative scan from the verified offset PizZip will read: count the real
+  // central-file-header records, walking each by its declared lengths, bounded by
+  // [cdOffset, cdEndExpected). Each record advances pos by ≥ 46 and we throw at
+  // the cap, so this loops at most MAX_ARCHIVE_ENTRIES + 1 times.
   let pos = cdOffset;
   let count = 0;
-  while (pos + 46 <= eocd) {
+  while (pos + 46 <= cdEndExpected) {
     if (dv.getUint32(pos, true) !== 0x02014b50) break; // end of central directory
     if (++count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
     const nameLen = dv.getUint16(pos + 28, true);
