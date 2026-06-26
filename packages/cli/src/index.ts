@@ -53,6 +53,7 @@ import {
   setSetting,
   listSettings,
   listUsers,
+  getReport,
   ingestSms,
   listSms,
   getSms,
@@ -709,6 +710,24 @@ settings
       }
       return setSetting(buildDeps(), await resolveAuth(opts.token), { key: opts.key, value });
     }),
+  );
+
+// ── report (报表) ──────────────────────────────────────────────────────────────
+program
+  .command("report")
+  .description("报表统计（ADMIN / 主任）")
+  .option("--preset <p>", "month|quarter|year|lastYear", "month")
+  .option("--start <date>", "自定义区间起 YYYY-MM-DD")
+  .option("--end <date>", "自定义区间止 YYYY-MM-DD")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      getReport(buildDeps(), await resolveAuth(opts.token), {
+        preset: opts.start && opts.end ? undefined : opts.preset,
+        start: opts.start,
+        end: opts.end,
+      }),
+    ),
   );
 
 // ── user (用户目录) ────────────────────────────────────────────────────────────

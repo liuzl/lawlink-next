@@ -224,6 +224,30 @@ export interface SmsRow {
   processed: boolean;
   parsed: ParsedSms | null;
 }
+export interface ReportData {
+  period: { start: string; end: string; label: string };
+  portfolio: {
+    total: number;
+    active: number;
+    archived: number;
+    byCategory: { category: string; count: number }[];
+    byStatus: { status: string; count: number }[];
+  };
+  activity: {
+    newMatters: number;
+    newIntakes: number;
+    closedMatters: number;
+    finance: {
+      receivable: string;
+      received: string;
+      refund: string;
+      cost: string;
+      commission: string;
+      netReceived: string;
+    };
+  };
+  byLawyer: { userId: string; name: string; activeOwned: number; receivedInPeriod: string }[];
+}
 export interface UserRow {
   id: string;
   name: string;
@@ -421,6 +445,14 @@ export const api = {
     req<{ deadlineId: string }>(`/sms/${id}/gen-deadline`, { method: "POST" }),
   markSmsProcessed: (id: string, processed = true) =>
     req<{ processed: boolean }>(`/sms/${id}/processed`, { method: "POST", body: JSON.stringify({ processed }) }),
+  getReport: (params: { preset?: string; start?: string; end?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.preset) q.set("preset", params.preset);
+    if (params.start) q.set("start", params.start);
+    if (params.end) q.set("end", params.end);
+    const qs = q.toString();
+    return req<ReportData>(`/reports${qs ? `?${qs}` : ""}`);
+  },
   listUsers: (activeOnly = false) => req<UserRow[]>(`/users${activeOnly ? "?activeOnly=true" : ""}`),
   listSettings: () => req<SettingRow[]>("/settings"),
   setSetting: (key: string, value: unknown) =>

@@ -54,6 +54,7 @@ import {
   setSetting,
   listSettings,
   listUsers,
+  getReport,
   ingestSms,
   listSms,
   getSms,
@@ -542,6 +543,21 @@ app.post("/api/documents/:id/file", requireAuth, async (c) => {
 app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   try {
     return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── reports (报表, 管理角色) ────────────────────────────────────────────────────
+app.get("/api/reports", requireAuth, async (c) => {
+  try {
+    return c.json(
+      await getReport(buildDeps(), c.get("auth"), {
+        preset: c.req.query("preset"),
+        start: c.req.query("start"),
+        end: c.req.query("end"),
+      }),
+    );
   } catch (err) {
     return fail(c, err);
   }

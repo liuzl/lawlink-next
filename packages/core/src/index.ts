@@ -19,3 +19,4 @@ export * from "./settings/index.js";
 export * from "./seal/index.js";
 export * from "./sms/index.js";
 export * from "./user/index.js";
+export * from "./reports/index.js";
