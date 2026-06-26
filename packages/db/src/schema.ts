@@ -207,6 +207,8 @@ export const feeEntries = sqliteTable(
   (t) => [
     index("FeeEntry_matter_idx").on(t.matterId, t.type),
     index("FeeEntry_parent_idx").on(t.parentFeeEntryId),
+    // Period reports range-scan by occurredAt (leading) then filter by type.
+    index("FeeEntry_occurred_idx").on(t.occurredAt, t.type),
   ],
 );
 

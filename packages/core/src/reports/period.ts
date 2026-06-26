@@ -38,7 +38,14 @@ export function customPeriod(startStr: string, endStr: string): ReportPeriod {
   const parse = (s: string): Date | null => {
     const m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
     if (!m) return null;
-    return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+    const y = Number(m[1]);
+    const mo = Number(m[2]);
+    const d = Number(m[3]);
+    const dt = new Date(y, mo - 1, d);
+    // Reject impossible dates that JS would silently normalize (2026-02-31 →
+    // March, 2026-13-01 → next year) so the report period matches the request.
+    if (dt.getFullYear() !== y || dt.getMonth() !== mo - 1 || dt.getDate() !== d) return null;
+    return dt;
   };
   const start = parse(startStr);
   const endDay = parse(endStr);

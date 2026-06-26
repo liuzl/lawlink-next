@@ -32,6 +32,11 @@ export async function getReport(deps: Deps, auth: AuthContext, rawInput?: unknow
   } catch (err) {
     throw new DomainError("VALIDATION", err instanceof Error ? err.message : "无效的统计区间");
   }
+  // Cap the analysed window (presets are ≤1y; a wide custom range could turn the
+  // fee scan into a huge materialised aggregation) — bound it at ~3 years.
+  if (period.end.getTime() - period.start.getTime() > 1100 * 86400000) {
+    throw new DomainError("VALIDATION", "统计区间过长（上限约 3 年）");
+  }
   const { start, end } = period;
   const inPeriod = (col: SQLiteColumn) => and(gte(col, start), lt(col, end));
 
@@ -68,10 +73,13 @@ export async function getReport(deps: Deps, auth: AuthContext, rawInput?: unknow
     .from(archiveRecords)
     .where(inPeriod(archiveRecords.archivedAt));
 
-  // Finance for the period: sum TEXT amounts in cents, by type.
+  // Finance for the period — ONE indexed scan (FeeEntry_occurred_idx) joined to
+  // matters, reused for both the by-type totals and the received-by-owner roll-up
+  // below (every fee entry has a matter, so the inner join drops nothing).
   const feeRows = await deps.db
-    .select({ type: feeEntries.type, amount: feeEntries.amount })
+    .select({ type: feeEntries.type, amount: feeEntries.amount, ownerId: matters.ownerId })
     .from(feeEntries)
+    .innerJoin(matters, eq(feeEntries.matterId, matters.id))
     .where(inPeriod(feeEntries.occurredAt));
   const cents = (type: string) =>
     feeRows.filter((f) => f.type === type).reduce((s, f) => s + toCents(f.amount), 0);
@@ -92,15 +100,12 @@ export async function getReport(deps: Deps, auth: AuthContext, rawInput?: unknow
     .from(matters)
     .where(inArray(matters.status, [...ACTIVE_STATUSES]))
     .groupBy(matters.ownerId);
-  const receivedRows = await deps.db
-    .select({ ownerId: matters.ownerId, amount: feeEntries.amount })
-    .from(feeEntries)
-    .innerJoin(matters, eq(feeEntries.matterId, matters.id))
-    .where(and(eq(feeEntries.type, "RECEIVED"), inPeriod(feeEntries.occurredAt)));
 
   const ownedMap = new Map(activeOwned.map((r) => [r.ownerId, Number(r.count)]));
+  // Received-by-owner reuses the single feeRows scan above (no second query).
   const receivedMap = new Map<string, number>();
-  for (const r of receivedRows) {
+  for (const r of feeRows) {
+    if (r.type !== "RECEIVED") continue;
     receivedMap.set(r.ownerId, (receivedMap.get(r.ownerId) ?? 0) + toCents(r.amount));
   }
   const ownerIds = [...new Set([...ownedMap.keys(), ...receivedMap.keys()])];

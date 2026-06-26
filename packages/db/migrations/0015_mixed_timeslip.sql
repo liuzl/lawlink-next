@@ -1,0 +1,1 @@
+CREATE INDEX `FeeEntry_occurred_idx` ON `FeeEntry` (`occurred_at`,`type`);
