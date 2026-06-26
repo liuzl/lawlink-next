@@ -45,83 +45,39 @@ function dottedParser(tag: string) {
 // We inspect the central-directory sizes (no decompression) before docxtemplater
 // parses, and cap entry count, total uncompressed size, and compression ratio.
 const MAX_ARCHIVE_ENTRIES = 512;
-const MAX_CENTRAL_DIR_BYTES = 8 * 1024 * 1024; // central-directory region cap
 const MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024; // 100MB expanded
 const MAX_COMPRESSION_RATIO = 200; // declared-uncompressed / on-disk bytes
 
+// Central-file-header signature (PK\x01\x02) in little-endian byte order.
+const CFH_SIG = [0x50, 0x4b, 0x01, 0x02] as const;
+
 /** Byte-level ZIP preflight that runs before `new PizZip()` allocates any entry
- * objects. PizZip walks central-directory records by signature (it does NOT
- * honor the EOCD-declared count), so the EOCD count cannot be trusted as a
- * bound. Instead we locate the EOCD, derive the central-directory start, then
- * scan the actual `0x02014b50` records ourselves — walking each record by its
- * declared lengths and rejecting the instant the real count exceeds the cap.
- * This is the same record stream PizZip would allocate, so the two cannot
- * disagree; it blocks parser-level DoS (hundreds of thousands of tiny records
- * under the 20MB upload cap) that the post-parse size/ratio checks don't cover. */
+ * objects, capping the entry count to block a parser-level DoS (hundreds of
+ * thousands of tiny entries packed under the 20MB upload cap).
+ *
+ * Rather than mirror PizZip's central-directory parsing — whose EOCD selection,
+ * prepended-byte normalization, and comment handling are all easy to disagree
+ * with — we use a quirk-independent upper bound: PizZip constructs exactly one
+ * ZipEntry per central-file-header record, and every such record begins with the
+ * 4-byte CFH signature present verbatim in the bytes (the central directory is
+ * always stored, never compressed). So the number of CFH signatures anywhere in
+ * the file is a hard ceiling on how many entries PizZip can allocate, regardless
+ * of which EOCD it picks or any offset trickery. We count them (early-exiting at
+ * the cap) and reject before PizZip runs. A legitimate .docx's package parts are
+ * deflated, so their inner bytes don't expose stray CFH signatures — its count
+ * equals its real part count, far below the cap. */
 function preScanZip(bytes: Uint8Array): void {
-  const n = bytes.length;
-  if (n < 22) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
-  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // Pick the SAME EOCD PizZip will: the last 0x06054b50 signature in the file
-  // (its lastIndexOfSignature). A valid EOCD sits within the 64KB comment window
-  // of EOF, so the first hit scanning backward in that window is the global last
-  // occurrence. We must NOT skip to an earlier EOCD — an attacker can hide a fake
-  // EOCD (pointing at thousands of central headers) inside a real EOCD's comment;
-  // PizZip would parse the fake one. So if the last signature's declared comment
-  // does not end exactly at EOF, reject rather than continue.
-  const maxBack = Math.min(n, 22 + 0xffff);
-  let eocd = -1;
-  for (let i = n - 22; i >= n - maxBack; i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
-  }
-  if (eocd < 0) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
-  if (eocd + 22 + dv.getUint16(eocd + 20, true) !== n) {
-    throw new DomainError("VALIDATION", "docx 目录区异常");
-  }
-
-  let cdSize = dv.getUint32(eocd + 12, true);
-  let cdOffset = dv.getUint32(eocd + 16, true);
-  // The central directory must end exactly where the EOCD (or, in Zip64, the
-  // Zip64 EOCD record) begins. Anything else means prepended bytes or a forged
-  // offset — and PizZip *normalizes* prepended bytes (extraBytes = eocd - cdEnd)
-  // so it would still load every record from a shifted offset. We reject the
-  // mismatch outright rather than chase PizZip's offset arithmetic.
-  let cdEndExpected = eocd;
-  // Zip64: any maxed-out 16/32-bit field → read the authoritative 64-bit values.
-  if (cdSize === 0xffffffff || cdOffset === 0xffffffff || dv.getUint16(eocd + 10, true) === 0xffff) {
-    const locOff = eocd - 20;
-    if (locOff < 0 || dv.getUint32(locOff, true) !== 0x07064b50) {
-      throw new DomainError("VALIDATION", "docx 目录区异常");
-    }
-    const z64 = Number(dv.getBigUint64(locOff + 8, true));
-    if (z64 < 0 || z64 + 56 > n || dv.getUint32(z64, true) !== 0x06064b50) {
-      throw new DomainError("VALIDATION", "docx 目录区异常");
-    }
-    cdSize = Number(dv.getBigUint64(z64 + 40, true));
-    cdOffset = Number(dv.getBigUint64(z64 + 48, true));
-    cdEndExpected = z64; // CD must immediately precede the Zip64 EOCD record
-  }
-  if (
-    cdOffset < 0 ||
-    cdSize > MAX_CENTRAL_DIR_BYTES ||
-    cdOffset + cdSize !== cdEndExpected // adjacency: no prefix / no forged offset
-  ) {
-    throw new DomainError("VALIDATION", "docx 目录区异常");
-  }
-
-  // Authoritative scan from the verified offset PizZip will read: count the real
-  // central-file-header records, walking each by its declared lengths, bounded by
-  // [cdOffset, cdEndExpected). Each record advances pos by ≥ 46 and we throw at
-  // the cap, so this loops at most MAX_ARCHIVE_ENTRIES + 1 times.
-  let pos = cdOffset;
   let count = 0;
-  while (pos + 46 <= cdEndExpected) {
-    if (dv.getUint32(pos, true) !== 0x02014b50) break; // end of central directory
-    if (++count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
-    const nameLen = dv.getUint16(pos + 28, true);
-    const extraLen = dv.getUint16(pos + 30, true);
-    const cmtLen = dv.getUint16(pos + 32, true);
-    pos += 46 + nameLen + extraLen + cmtLen;
+  const end = bytes.length - 3;
+  for (let i = 0; i < end; i++) {
+    if (
+      bytes[i] === CFH_SIG[0] &&
+      bytes[i + 1] === CFH_SIG[1] &&
+      bytes[i + 2] === CFH_SIG[2] &&
+      bytes[i + 3] === CFH_SIG[3]
+    ) {
+      if (++count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
+    }
   }
 }
 
