@@ -10,3 +10,4 @@ export * from "./preservation/index.js";
 export * from "./dashboard/index.js";
 export * from "./client/index.js";
 export * from "./activity/index.js";
+export * from "./finance/index.js";

@@ -166,6 +166,65 @@ export const deadlines = sqliteTable(
   ],
 );
 
+/** Billing / settlement (结算单, DOMAIN-SPEC §4.11). */
+export const billings = sqliteTable(
+  "Billing",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    title: text("title").notNull(),
+    contractAmount: text("contract_amount").notNull(),
+    schedule: text("schedule"),
+    // DRAFT | ACTIVE | CLOSED
+    status: text("status").notNull().default("DRAFT"),
+    signedAt: integer("signed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Billing_matter_idx").on(t.matterId)],
+);
+
+/** Fee entry / cash flow (收付记录, DOMAIN-SPEC §4.11).
+ * type: RECEIVABLE 应收 | RECEIVED 实收 | REFUND 退款 | COST 成本 | COMMISSION 分成. */
+export const feeEntries = sqliteTable(
+  "FeeEntry",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    billingId: text("billing_id"),
+    type: text("type").notNull(),
+    amount: text("amount").notNull(),
+    occurredAt: integer("occurred_at", { mode: "timestamp" }).notNull(),
+    invoiceNo: text("invoice_no"),
+    payerOrPayee: text("payer_or_payee"),
+    method: text("method"),
+    note: text("note"),
+    // auto commission rows point at the RECEIVED entry that triggered them
+    parentFeeEntryId: text("parent_fee_entry_id"),
+    beneficiaryUserId: text("beneficiary_user_id"),
+    recordedById: text("recorded_by_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("FeeEntry_matter_idx").on(t.matterId, t.type),
+    index("FeeEntry_parent_idx").on(t.parentFeeEntryId),
+  ],
+);
+
+/** Per-matter commission plan (分成方案, DOMAIN-SPEC §4.11). */
+export const commissionPlans = sqliteTable(
+  "CommissionPlan",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    userId: text("user_id").notNull(),
+    percent: text("percent").notNull(),
+    label: text("label"),
+    active: integer("active", { mode: "boolean" }).notNull().default(true),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [uniqueIndex("CommissionPlan_matter_user_uq").on(t.matterId, t.userId)],
+);
+
 /** Task on a matter (跨程序通用任务, DOMAIN-SPEC §4.8). */
 export const tasks = sqliteTable(
   "Task",

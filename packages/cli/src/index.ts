@@ -23,12 +23,16 @@ import {
   listMatterNotes,
   listMatterTasks,
   createClient,
+  createFeeEntry,
   createIntake,
   createPreservation,
   declineIntake,
+  deleteFeeEntry,
   getClient,
   getDashboard,
   getMatter,
+  getMatterFinance,
+  setCommissionPlan,
   hashPassword,
   listClients,
   listMatterDeadlines,
@@ -356,6 +360,51 @@ deadline
   .action((opts) =>
     run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
   );
+
+// ── finance ───────────────────────────────────────────────────────────────────
+const finance = program.command("finance").description("财务");
+finance
+  .command("set-plan")
+  .description("设置分成方案：--plan userId:percent[:label] 可多次")
+  .requiredOption("--matter-id <id>")
+  .option("--plan <p...>", "如 user1:30:合伙人", [])
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      const plans = (opts.plan as string[]).map((s) => {
+        const [userId, percent, label] = s.split(":");
+        return { userId, percent, label };
+      });
+      return setCommissionPlan(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, plans });
+    }),
+  );
+finance
+  .command("add-entry")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--type <t>", "RECEIVABLE|RECEIVED|REFUND|COST")
+  .requiredOption("--amount <a>")
+  .option("--payer-or-payee <p>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      createFeeEntry(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        type: opts.type,
+        amount: opts.amount,
+        payerOrPayee: opts.payerOrPayee,
+      }),
+    ),
+  );
+finance
+  .command("delete-entry")
+  .requiredOption("--fee-entry-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => deleteFeeEntry(buildDeps(), await resolveAuth(opts.token), { feeEntryId: opts.feeEntryId })));
+finance
+  .command("show")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => getMatterFinance(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
 
 // ── task / note / hearing ─────────────────────────────────────────────────────
 const task = program.command("task").description("任务");

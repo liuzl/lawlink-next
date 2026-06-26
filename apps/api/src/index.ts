@@ -24,9 +24,13 @@ import {
   listMatterTasks,
   convertIntake,
   createClient,
+  createFeeEntry,
   createIntake,
   createPreservation,
   declineIntake,
+  deleteFeeEntry,
+  getMatterFinance,
+  setCommissionPlan,
   getClient,
   getDashboard,
   getMatter,
@@ -276,6 +280,37 @@ app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(await addHearing(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/finance", requireAuth, async (c) => {
+  try {
+    return c.json(await getMatterFinance(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/fee-entries", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await createFeeEntry(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/commission-plan", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await setCommissionPlan(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/fee-entries/:id/delete", requireAuth, async (c) => {
+  try {
+    return c.json(await deleteFeeEntry(buildDeps(), c.get("auth"), { feeEntryId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
