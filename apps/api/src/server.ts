@@ -23,6 +23,10 @@ try {
 }
 
 const port = Number(process.env.PORT ?? 8787);
+// Bind all interfaces by default so the single-origin server is reachable from
+// other machines (e.g. over the tailnet); override with HOST=127.0.0.1 to
+// restrict to localhost.
+const hostname = process.env.HOST ?? "0.0.0.0";
 
 // Resolve the SPA build relative to THIS file (not cwd), so the server works the
 // same whether launched from the repo root or apps/api. LAWLINK_WEB_DIST overrides.
@@ -46,6 +50,6 @@ if (existsSync(path.join(webDist, "index.html"))) {
   console.log("SPA dist not found — running API-only (use Vite for the SPA in dev)");
 }
 
-serve({ fetch: app.fetch, port });
+serve({ fetch: app.fetch, port, hostname });
 // eslint-disable-next-line no-console
-console.log(`lawlink-next on http://localhost:${port}`);
+console.log(`lawlink-next on http://${hostname}:${port}`);
