@@ -530,7 +530,10 @@ const uploadBodyLimit = bodyLimit({
   maxSize: MAX_UPLOAD_BYTES + 1024 * 1024,
   onError: (c) => c.json({ error: "文件超过 50MB 上限" }, 413),
 });
-app.post("/api/matters/:id/documents/upload", uploadBodyLimit, requireAuth, async (c) => {
+// requireAuth FIRST (header-only, rejects before any body read), THEN the
+// streamed body cap, THEN the handler — so an unauthenticated large body can't
+// be buffered to force resource exhaustion.
+app.post("/api/matters/:id/documents/upload", requireAuth, uploadBodyLimit, async (c) => {
   try {
     const form = await c.req.formData();
     const file = form.get("file");
