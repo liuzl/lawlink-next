@@ -521,8 +521,15 @@ app.post("/api/matters/:id/documents", requireAuth, async (c) => {
   }
 });
 // Real-file upload (multipart/form-data: file + name/category/folderId fields).
+const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
 app.post("/api/matters/:id/documents/upload", requireAuth, async (c) => {
   try {
+    // Reject oversized bodies BEFORE buffering the multipart payload into memory.
+    // (Multipart adds overhead, so allow a little slack over the 50MB file cap.)
+    const len = Number(c.req.header("content-length") ?? 0);
+    if (len > MAX_UPLOAD_BYTES + 1024 * 1024) {
+      return c.json({ error: "文件超过 50MB 上限" }, 413);
+    }
     const form = await c.req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) throw new DomainError("VALIDATION", "缺少上传文件");

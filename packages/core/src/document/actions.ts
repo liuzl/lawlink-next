@@ -54,16 +54,23 @@ export const RegisterDocumentInput = z.object({
   category: CATEGORY.default("OTHER"),
   folderId: z.string().min(1).optional(),
   sourceParty: z.string().max(120).optional(),
-  // Blob metadata supplied by the upload adapter (all optional at register).
-  storageKey: z.string().max(512).optional(),
-  mimeType: z.string().max(120).optional(),
-  size: z.coerce.number().int().nonnegative().optional(),
-  sha256: z.string().regex(/^[0-9a-f]{64}$/i, "sha256 应为 64 位十六进制").optional(),
   tags: z.array(z.string().max(40)).max(20).optional(),
 });
 
-/** Register a document's metadata against a matter (status starts DRAFT). */
-export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: unknown) {
+/** Server-only blob metadata. NEVER taken from the public input — only
+ * uploadDocument supplies it with a freshly-generated storageKey, so a caller
+ * can't alias another document's bytes by pointing storageKey at a known key. */
+interface StorageMeta {
+  storageKey: string;
+  mimeType?: string;
+  size: number;
+  sha256: string;
+}
+
+/** Register a document's metadata against a matter (status starts DRAFT). The
+ * optional `storage` arg is internal (uploadDocument); it is not part of the
+ * public input contract. */
+export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: unknown, storage?: StorageMeta) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = RegisterDocumentInput.parse(rawInput);
   await assertMatterWritable(deps.db, auth, input.matterId); // preflight (precise errors)
@@ -106,10 +113,10 @@ export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: 
       version: 1,
       isLatest: true,
       familyId: null,
-      storageKey: input.storageKey ?? null,
-      mimeType: input.mimeType ?? null,
-      size: input.size ?? null,
-      sha256: input.sha256 ?? null,
+      storageKey: storage?.storageKey ?? null,
+      mimeType: storage?.mimeType ?? null,
+      size: storage?.size ?? null,
+      sha256: storage?.sha256 ?? null,
       tagsJson: JSON.stringify(input.tags ?? []),
       uploadedById: auth.userId,
       deletedAt: null,
@@ -152,18 +159,19 @@ export async function uploadDocument(
   const sha256 = await sha256Hex(bytes);
   await deps.storage.put(storageKey, bytes, input.mimeType);
   try {
-    return await registerDocument(deps, auth, {
-      matterId: input.matterId,
-      name: input.name,
-      category: input.category,
-      folderId: input.folderId,
-      sourceParty: input.sourceParty,
-      storageKey,
-      mimeType: input.mimeType,
-      size: bytes.length,
-      sha256,
-      tags: input.tags,
-    });
+    return await registerDocument(
+      deps,
+      auth,
+      {
+        matterId: input.matterId,
+        name: input.name,
+        category: input.category,
+        folderId: input.folderId,
+        sourceParty: input.sourceParty,
+        tags: input.tags,
+      },
+      { storageKey, mimeType: input.mimeType, size: bytes.length, sha256 },
+    );
   } catch (err) {
     // Registration rejected (e.g. archived matter / bad folder) — drop the blob.
     await deps.storage.delete(storageKey).catch(() => {});
@@ -205,7 +213,10 @@ export async function listDocuments(deps: Deps, auth: AuthContext, rawInput: { m
     .from(documents)
     .where(and(eq(documents.matterId, rawInput.matterId), isNull(documents.deletedAt)))
     .orderBy(asc(documents.folderId), desc(documents.createdAt));
-  return rows.map((r) => ({ ...r, tags: JSON.parse(r.tagsJson) as string[] }));
+  // Never expose the internal storageKey (it's a download capability) — callers
+  // download by document id, which is authorization-checked. `size` is kept so
+  // the UI can show a download affordance for documents that have bytes.
+  return rows.map(({ storageKey: _omit, ...r }) => ({ ...r, tags: JSON.parse(r.tagsJson) as string[] }));
 }
 
 export const MoveDocumentInput = z.object({
