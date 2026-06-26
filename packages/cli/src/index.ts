@@ -10,10 +10,13 @@
 import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
+  addProcedure,
   convertIntake,
   createIntake,
   declineIntake,
+  getMatter,
   hashPassword,
+  listMatters,
   login,
   requireJwtSecret,
   runConflictCheck,
@@ -200,6 +203,43 @@ program
         idNumber: opts.idNumber,
         candidateRole: opts.candidateRole,
         intakeId: opts.intakeId,
+      }),
+    ),
+  );
+
+// ── matter ──────────────────────────────────────────────────────────────────
+const matter = program.command("matter").description("案件 / 程序");
+
+matter
+  .command("list")
+  .option("--token <token>", "登录态")
+  .action((opts) => run(async () => listMatters(buildDeps(), await resolveAuth(opts.token))));
+
+matter
+  .command("show")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => getMatter(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })),
+  );
+
+matter
+  .command("add-procedure")
+  .description("为案件新增程序（一审/二审/执行…）")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--type <type>", "程序类型，如 FIRST_INSTANCE")
+  .option("--engagement <e>", "ENGAGED|INFORMATIONAL", "ENGAGED")
+  .option("--case-number <no>", "案号")
+  .option("--handling-agency <a>", "办理机关")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      addProcedure(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        type: opts.type,
+        engagement: opts.engagement,
+        caseNumber: opts.caseNumber,
+        handlingAgency: opts.handlingAgency,
       }),
     ),
   );

@@ -10,10 +10,13 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 import {
+  addProcedure,
   convertIntake,
   createIntake,
   declineIntake,
+  getMatter,
   listIntakes,
+  listMatters,
   login,
   requireJwtSecret,
   runConflictCheck,
@@ -125,6 +128,34 @@ app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
 app.post("/api/conflicts/check", requireAuth, async (c) => {
   try {
     return c.json(await runConflictCheck(buildDeps(), c.get("auth"), await c.req.json()));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatters(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id", requireAuth, async (c) => {
+  try {
+    return c.json(await getMatter(buildDeps(), c.get("auth"), { matterId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(
+      await addProcedure(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      201,
+    );
   } catch (err) {
     return fail(c, err);
   }

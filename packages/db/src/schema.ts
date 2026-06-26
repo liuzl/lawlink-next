@@ -9,7 +9,7 @@
  * This is a P0 slice (User + Intake) proving the pattern. The full schema is
  * ported per docs/SQLITE_D1_MIGRATION.md in P2.
  */
-import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index, uniqueIndex } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("User", {
   id: text("id").primaryKey(),
@@ -79,6 +79,29 @@ export const conflictChecks = sqliteTable("ConflictCheck", {
   checkedById: text("checked_by_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
+
+/** A procedure within a matter (一审/二审/执行…). DOMAIN-SPEC §3. */
+export const matterProcedures = sqliteTable(
+  "MatterProcedure",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    type: text("type").notNull(),
+    // ENGAGED (我方代理) | INFORMATIONAL (前序参考)
+    engagement: text("engagement").notNull().default("ENGAGED"),
+    order: integer("order").notNull(),
+    caseNumber: text("case_number"),
+    handlingAgency: text("handling_agency"),
+    handler: text("handler"),
+    // PENDING | IN_PROGRESS | CONCLUDED
+    status: text("status").notNull().default("PENDING"),
+    outcome: text("outcome"),
+    acceptedAt: integer("accepted_at", { mode: "timestamp" }),
+    concludedAt: integer("concluded_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [uniqueIndex("MatterProcedure_matter_order_uq").on(t.matterId, t.order)],
+);
 
 /** Atomic named counters (internalCode sequences, etc.). */
 export const counters = sqliteTable("Counter", {
