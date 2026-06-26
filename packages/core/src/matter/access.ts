@@ -11,8 +11,8 @@
  * checks never touch the DB. Only a non-owner case-worker triggers the roster
  * query. Access is async because membership is a stored relation.
  */
-import { and, eq } from "drizzle-orm";
-import { matterMembers } from "@lawlink/db";
+import { and, eq, inArray, or, type SQL } from "drizzle-orm";
+import { matterMembers, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement } from "../permissions.js";
 
@@ -47,4 +47,32 @@ export async function assertMatterAccess(
   auth: AuthContext,
 ): Promise<void> {
   if (!(await canAccessMatter(db, matter, auth))) throw new DomainError("NOT_FOUND", "案件不存在");
+}
+
+/**
+ * A `matters`-row visibility predicate for aggregate views that scan across many
+ * matters (matter list, schedule, dashboard) — the single source of truth so
+ * those surfaces agree with assertMatterAccess. Apply the result to a query whose
+ * FROM/JOIN includes the `matters` table. Returns:
+ *  - `undefined` → no restriction (management sees all matters);
+ *  - an SQL condition → restrict to the caller's owned + member matters;
+ *  - `null` → the caller can see no matters (the caller should short-circuit to
+ *    an empty result rather than run the query).
+ */
+export async function matterVisibilityCondition(
+  db: Deps["db"],
+  auth: AuthContext,
+): Promise<SQL | undefined | null> {
+  if (isManagement(auth)) return undefined;
+  if (auth.role !== "LAWYER" && auth.role !== "ASSISTANT") return null;
+  const rows = await db
+    .select({ matterId: matterMembers.matterId })
+    .from(matterMembers)
+    .where(eq(matterMembers.userId, auth.userId));
+  const ids = rows.map((r) => r.matterId);
+  if (auth.role === "LAWYER") {
+    return ids.length ? or(eq(matters.ownerId, auth.userId), inArray(matters.id, ids)) : eq(matters.ownerId, auth.userId);
+  }
+  // ASSISTANT: membership-only — nothing to show without memberships.
+  return ids.length ? inArray(matters.id, ids) : null;
 }

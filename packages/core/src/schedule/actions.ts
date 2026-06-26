@@ -8,7 +8,7 @@ import { z } from "zod";
 import { and, eq, getTableColumns, gte, inArray, lte } from "drizzle-orm";
 import { deadlines, hearings, matterProcedures, matters, preservations, tasks } from "@lawlink/db";
 import { type AuthContext, type Deps } from "../types.js";
-import { isManagement } from "../permissions.js";
+import { matterVisibilityCondition } from "../matter/access.js";
 
 export type ScheduleKind = "HEARING" | "DEADLINE" | "PRESERVATION" | "TASK";
 
@@ -38,10 +38,11 @@ export async function getSchedule(deps: Deps, auth: AuthContext, rawInput?: unkn
     to = new Date(from.getTime() + 400 * 86400000);
   }
 
-  // Visibility: management = all; LAWYER = own matters; others = none.
-  const canSeeAny = isManagement(auth) || auth.role === "LAWYER";
-  if (!canSeeAny) return { from: from.toISOString(), to: to.toISOString(), items: [] as ScheduleItem[] };
-  const matterVis = isManagement(auth) ? undefined : eq(matters.ownerId, auth.userId);
+  // Membership-aware visibility (management all / owned+member / none) — the same
+  // scope as the matter list and dashboard, so an assigned member sees the matter's
+  // hearings/deadlines/preservations/tasks in their agenda.
+  const matterVis = await matterVisibilityCondition(deps.db, auth);
+  if (matterVis === null) return { from: from.toISOString(), to: to.toISOString(), items: [] as ScheduleItem[] };
 
   // Hearings (ENGAGED procedures only; matter-scoped join so a drifted row can't
   // borrow another matter's engagement).

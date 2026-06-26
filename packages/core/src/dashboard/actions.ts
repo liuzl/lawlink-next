@@ -7,6 +7,7 @@ import { and, asc, eq, inArray, lte, sql } from "drizzle-orm";
 import { deadlines, intakes, matterProcedures, matters, preservations } from "@lawlink/db";
 import { type AuthContext, type Deps } from "../types.js";
 import { isManagement } from "../permissions.js";
+import { matterVisibilityCondition } from "../matter/access.js";
 
 const HORIZON_DAYS = 30;
 
@@ -14,17 +15,17 @@ export async function getDashboard(deps: Deps, auth: AuthContext) {
   const now = deps.clock.now();
   const horizon = new Date(now.getTime() + HORIZON_DAYS * 86400000);
 
-  // Matter visibility: management = all; LAWYER = own; others = none.
-  const canSeeAny = isManagement(auth) || auth.role === "LAWYER";
-  const matterVis = isManagement(auth) ? undefined : eq(matters.ownerId, auth.userId);
-
   const empty = {
     counts: { activeMatters: 0, pendingIntakes: 0, upcomingDeadlines: 0, expiringPreservations: 0 },
     upcomingDeadlines: [] as unknown[],
     expiringPreservations: [] as unknown[],
     horizonDays: HORIZON_DAYS,
   };
-  if (!canSeeAny) return empty;
+  // Membership-aware matter visibility (management all / owned+member / none) —
+  // the same scope as the matter list and schedule, so assigned members see their
+  // matters' proactive deadline/preservation alerts here too.
+  const matterVis = await matterVisibilityCondition(deps.db, auth);
+  if (matterVis === null) return empty;
 
   const [{ activeMatters }] = await deps.db
     .select({ activeMatters: sql<number>`count(*)` })
