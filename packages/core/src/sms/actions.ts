@@ -25,15 +25,18 @@ function addDays(base: Date, n: number): Date {
   return d;
 }
 
-/** Find the matter (and procedure) whose case number matches the parsed SMS. */
-async function autoMatch(deps: Deps, caseNumbers: string[]) {
+/** Auto-match a matter by case number — ONLY when unambiguous. caseNumber has no
+ * uniqueness constraint, so if the parsed numbers resolve to two+ distinct
+ * matters we leave the SMS UNMATCHED (manual assignment) rather than guess and
+ * risk leaking the message to the wrong matter owner. */
+async function autoMatch(deps: Deps, caseNumbers: string[]): Promise<string | null> {
   if (caseNumbers.length === 0) return null;
-  const [proc] = await deps.db
-    .select({ matterId: matterProcedures.matterId, procedureId: matterProcedures.id })
+  const candidates = await deps.db
+    .selectDistinct({ matterId: matterProcedures.matterId })
     .from(matterProcedures)
     .where(inArray(matterProcedures.caseNumber, caseNumbers))
-    .limit(1);
-  return proc ?? null;
+    .limit(2);
+  return candidates.length === 1 ? candidates[0].matterId : null;
 }
 
 export const IngestSmsInput = z.object({
@@ -47,7 +50,7 @@ export async function ingestSms(deps: Deps, auth: AuthContext, rawInput: unknown
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = IngestSmsInput.parse(rawInput);
   const parsed = parseSms(input.rawText);
-  const match = await autoMatch(deps, parsed.caseNumbers);
+  const matchedMatterId = await autoMatch(deps, parsed.caseNumbers);
 
   const now = deps.clock.now();
   const id = deps.ids.newId();
@@ -58,8 +61,8 @@ export async function ingestSms(deps: Deps, auth: AuthContext, rawInput: unknown
     receivedById: auth.userId,
     parsedJson: JSON.stringify(parsed),
     smsType: parsed.smsType,
-    matchedMatterId: match?.matterId ?? null,
-    matchedBy: match ? "AUTO_CASE_NUMBER" : "UNMATCHED",
+    matchedMatterId,
+    matchedBy: matchedMatterId ? "AUTO_CASE_NUMBER" : "UNMATCHED",
     generatedHearingId: null,
     generatedDeadlineId: null,
     processed: false,
@@ -71,9 +74,9 @@ export async function ingestSms(deps: Deps, auth: AuthContext, rawInput: unknown
     action: "SMS_INGEST",
     targetType: "SmsMessage",
     targetId: id,
-    detail: { smsType: parsed.smsType, matched: match ? "AUTO_CASE_NUMBER" : "UNMATCHED" },
+    detail: { smsType: parsed.smsType, matched: matchedMatterId ? "AUTO_CASE_NUMBER" : "UNMATCHED" },
   });
-  return { id, smsType: parsed.smsType, matchedMatterId: match?.matterId ?? null, parsed };
+  return { id, smsType: parsed.smsType, matchedMatterId, parsed };
 }
 
 /** Parse-only preview (no persistence) — for a paste dialog. */
@@ -122,7 +125,10 @@ async function visibleSms(deps: Deps, auth: AuthContext, smsId: string) {
   const [r] = await deps.db.select().from(smsMessages).where(eq(smsMessages.id, smsId)).limit(1);
   if (!r) throw new DomainError("NOT_FOUND", "短信不存在");
   if (isManagement(auth) || r.receivedById === auth.userId) return r;
-  if (r.matchedMatterId) {
+  // Same predicate as listSms: only a LAWYER who OWNS the matched matter gets the
+  // SMS via the matter (ASSISTANT/FINANCE: own-received only). Keeps list and get
+  // — and the mutations gated by visibleSms — consistent.
+  if (auth.role === "LAWYER" && r.matchedMatterId) {
     const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matchedMatterId)).limit(1);
     if (m && m.ownerId === auth.userId) return r;
   }
@@ -160,7 +166,19 @@ export async function assignSmsMatter(deps: Deps, auth: AuthContext, rawInput: u
 /** Resolve the procedure to attach generated items to: an explicit id, else the
  * procedure in the matched matter whose case number the SMS referenced. */
 async function resolveProcedure(deps: Deps, matterId: string, parsed: ParsedSms, explicit?: string) {
-  if (explicit) return explicit;
+  if (explicit) {
+    // An explicit procedure MUST belong to the SMS's matched matter — otherwise a
+    // user could generate a hearing/deadline on an unrelated matter they happen to
+    // edit, from this SMS's content. If the SMS is for another case, re-assign first.
+    const [p] = await deps.db
+      .select({ matterId: matterProcedures.matterId })
+      .from(matterProcedures)
+      .where(eq(matterProcedures.id, explicit))
+      .limit(1);
+    if (!p) throw new DomainError("NOT_FOUND", "程序不存在");
+    if (p.matterId !== matterId) throw new DomainError("VALIDATION", "程序不属于该短信关联的案件");
+    return explicit;
+  }
   if (parsed.caseNumbers.length) {
     const [p] = await deps.db
       .select({ id: matterProcedures.id })
@@ -191,6 +209,20 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   if (!startsAt) throw new DomainError("VALIDATION", "短信中未识别到开庭时间，请手动指定");
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
 
+  // Atomically CLAIM the SMS before creating anything: flip processed false→true
+  // in one guarded statement. A re-click or concurrent request matches 0 rows and
+  // bails — so one SMS spawns at most one generated record (no duplicates). All
+  // validation above ran first, so a failed validation never wrongly marks it
+  // processed. (If addHearing below fails, the SMS is processed with no hearing —
+  // recoverable via markSmsProcessed undo; still no duplicate.)
+  const now = deps.clock.now();
+  const claimed = await deps.db
+    .update(smsMessages)
+    .set({ processed: true, processedAt: now, updatedAt: now })
+    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false)))
+    .returning({ id: smsMessages.id });
+  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
+
   // addHearing enforces matter write access + audits; we just thread the data.
   const hearing = await addHearing(deps, auth, {
     procedureId,
@@ -201,7 +233,7 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   });
   await deps.db
     .update(smsMessages)
-    .set({ generatedHearingId: hearing.id, processed: true, processedAt: deps.clock.now(), updatedAt: deps.clock.now() })
+    .set({ generatedHearingId: hearing.id, updatedAt: deps.clock.now() })
     .where(eq(smsMessages.id, r.id));
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_HEARING",
@@ -239,6 +271,15 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   if (!dueAt) throw new DomainError("VALIDATION", "无法确定到期日，请手动指定");
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
 
+  // Atomic claim before creating — same idempotency guard as gen-hearing.
+  const now = deps.clock.now();
+  const claimed = await deps.db
+    .update(smsMessages)
+    .set({ processed: true, processedAt: now, updatedAt: now })
+    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false)))
+    .returning({ id: smsMessages.id });
+  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
+
   const deadline = await addDeadline(deps, auth, {
     procedureId,
     title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
@@ -248,7 +289,7 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   });
   await deps.db
     .update(smsMessages)
-    .set({ generatedDeadlineId: deadline.id, processed: true, processedAt: deps.clock.now(), updatedAt: deps.clock.now() })
+    .set({ generatedDeadlineId: deadline.id, updatedAt: deps.clock.now() })
     .where(eq(smsMessages.id, r.id));
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_DEADLINE",
