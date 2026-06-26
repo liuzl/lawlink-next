@@ -144,23 +144,28 @@ export const MoveDocumentInput = z.object({
 export async function moveDocument(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = MoveDocumentInput.parse(rawInput);
-  const doc = await writableDocument(deps, auth, input.documentId);
+  const doc = await writableDocument(deps, auth, input.documentId); // preflight
 
-  if (input.folderId) {
-    const [f] = await deps.db
-      .select({ matterId: documentFolders.matterId })
-      .from(documentFolders)
-      .where(eq(documentFolders.id, input.folderId))
-      .limit(1);
-    if (!f || f.matterId !== doc.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
-  }
+  // Guard the WRITE on the target folder still existing AND belonging to this
+  // matter, as a correlated subquery in the UPDATE predicate. Single-statement
+  // under the write lock, this serializes with deleteFolder's guarded DELETE:
+  // whichever commits first makes the other match 0 rows — so a move can never
+  // land a document in a folder that's being concurrently deleted.
+  const targetFolderOk =
+    input.folderId == null
+      ? undefined
+      : sql`exists (select 1 from ${documentFolders} where ${documentFolders.id} = ${input.folderId} and ${documentFolders.matterId} = ${documents.matterId})`;
 
   const moved = await deps.db
     .update(documents)
     .set({ folderId: input.folderId ?? null, updatedAt: deps.clock.now() })
-    .where(and(eq(documents.id, input.documentId), isNull(documents.deletedAt), matterNotArchived))
+    .where(
+      and(eq(documents.id, input.documentId), isNull(documents.deletedAt), matterNotArchived, targetFolderOk),
+    )
     .returning({ id: documents.id });
-  if (moved.length === 0) throw new DomainError("INVALID_STATE", "材料已删除或案件已归档，不能移动");
+  if (moved.length === 0) {
+    throw new DomainError("INVALID_STATE", "材料已删除、案件已归档或目标卷宗不存在");
+  }
   await deps.audit.record(auth, {
     action: "DOCUMENT_MOVE",
     targetType: "Document",

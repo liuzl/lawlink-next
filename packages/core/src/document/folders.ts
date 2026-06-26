@@ -16,6 +16,12 @@ import { assertMatterWritable } from "../matter/guards.js";
  * inside an outer transaction (e.g. intake conversion) or standalone. */
 type Tx = Parameters<Parameters<Deps["db"]["transaction"]>[0]>[0];
 
+/** Correlated guard: this folder's matter is NOT archived. Added to folder
+ * UPDATE/DELETE predicates so an archive landing after the preflight (TOCTOU)
+ * still can't mutate a closed case's folders — the guarded write matches 0
+ * rows. (createFolder, an INSERT, re-checks status inside its transaction.) */
+const folderMatterNotArchived = sql`exists (select 1 from ${matters} where ${matters.id} = ${documentFolders.matterId} and ${matters.status} <> 'ARCHIVED')`;
+
 /** Default folder names by category (DOMAIN-SPEC §7.2). */
 export const DEFAULT_FOLDERS: Record<MatterCategory, string[]> = {
   CIVIL_COMMERCIAL: ["收案", "立案", "委托手续", "证据", "程序文书", "庭审", "裁判", "结案"],
@@ -79,26 +85,38 @@ export async function createFolder(deps: Deps, auth: AuthContext, rawInput: unkn
   const input = CreateFolderInput.parse(rawInput);
   await assertMatterWritable(deps.db, auth, input.matterId);
 
-  // Allocate orderIndex after the current max so manual folders sort last.
-  const existing = await deps.db
-    .select({ orderIndex: documentFolders.orderIndex })
-    .from(documentFolders)
-    .where(eq(documentFolders.matterId, input.matterId));
-  const nextOrder = existing.reduce((m, r) => Math.max(m, r.orderIndex), -1) + 1;
-
   const now = deps.clock.now();
   const id = deps.ids.newId();
+  let nextOrder = 0;
+  // Re-check matter status INSIDE the txn right before the insert so an archive
+  // landing after the preflight can't create a folder on a closed case.
   try {
-    await deps.db.insert(documentFolders).values({
-      id,
-      matterId: input.matterId,
-      name: input.name,
-      orderIndex: nextOrder,
-      isDefault: false,
-      createdAt: now,
-      updatedAt: now,
+    await deps.db.transaction(async (tx) => {
+      const [m] = await tx
+        .select({ status: matters.status })
+        .from(matters)
+        .where(eq(matters.id, input.matterId))
+        .limit(1);
+      if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
+      if (m.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能新增卷宗");
+      // Allocate orderIndex after the current max so manual folders sort last.
+      const existing = await tx
+        .select({ orderIndex: documentFolders.orderIndex })
+        .from(documentFolders)
+        .where(eq(documentFolders.matterId, input.matterId));
+      nextOrder = existing.reduce((mx, r) => Math.max(mx, r.orderIndex), -1) + 1;
+      await tx.insert(documentFolders).values({
+        id,
+        matterId: input.matterId,
+        name: input.name,
+        orderIndex: nextOrder,
+        isDefault: false,
+        createdAt: now,
+        updatedAt: now,
+      });
     });
-  } catch {
+  } catch (err) {
+    if (err instanceof DomainError) throw err;
     // Unique(matterId,name) collision → a folder with this name already exists.
     throw new DomainError("CONFLICT", `卷宗「${input.name}」已存在`);
   }
@@ -125,16 +143,21 @@ export async function renameFolder(deps: Deps, auth: AuthContext, rawInput: unkn
     .where(eq(documentFolders.id, input.folderId))
     .limit(1);
   if (!f) throw new DomainError("NOT_FOUND", "卷宗不存在");
-  await assertMatterWritable(deps.db, auth, f.matterId);
+  await assertMatterWritable(deps.db, auth, f.matterId); // preflight (precise errors)
 
+  let renamed: { id: string }[];
   try {
-    await deps.db
+    // Guarded on matter-not-archived (race backstop); a unique(matterId,name)
+    // collision surfaces as the insert/update error and maps to CONFLICT.
+    renamed = await deps.db
       .update(documentFolders)
       .set({ name: input.name, updatedAt: deps.clock.now() })
-      .where(eq(documentFolders.id, input.folderId));
+      .where(and(eq(documentFolders.id, input.folderId), folderMatterNotArchived))
+      .returning({ id: documentFolders.id });
   } catch {
     throw new DomainError("CONFLICT", `卷宗「${input.name}」已存在`);
   }
+  if (renamed.length === 0) throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能改名");
   await deps.audit.record(auth, {
     action: "FOLDER_RENAME",
     targetType: "DocumentFolder",
@@ -170,6 +193,7 @@ export async function deleteFolder(deps: Deps, auth: AuthContext, rawInput: unkn
       and(
         eq(documentFolders.id, folderId),
         eq(documentFolders.isDefault, false),
+        folderMatterNotArchived,
         notExists(
           deps.db
             .select({ one: sql`1` })
@@ -179,7 +203,10 @@ export async function deleteFolder(deps: Deps, auth: AuthContext, rawInput: unkn
       ),
     )
     .returning({ id: documentFolders.id });
-  if (deleted.length === 0) throw new DomainError("INVALID_STATE", "卷宗内仍有材料，请先移出或删除");
+  // 0 rows: folder became non-empty OR the matter was archived between the
+  // preflight and this DELETE. Preflight already gave the precise archived
+  // message for the common case; this is the race backstop.
+  if (deleted.length === 0) throw new DomainError("INVALID_STATE", "卷宗内仍有材料或案件已归档，不能删除");
   await deps.audit.record(auth, {
     action: "FOLDER_DELETE",
     targetType: "DocumentFolder",
