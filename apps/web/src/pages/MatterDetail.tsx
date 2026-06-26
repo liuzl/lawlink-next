@@ -104,6 +104,8 @@ export function MatterDetail() {
   const [preservations, setPreservations] = useState<PreservationRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dlError, setDlError] = useState<string | null>(null);
+  const [presError, setPresError] = useState<string | null>(null);
+  const [presLoaded, setPresLoaded] = useState(false);
   const [presType, setPresType] = useState("");
   const [presProp, setPresProp] = useState("");
   const [presStart, setPresStart] = useState("");
@@ -146,13 +148,19 @@ export function MatterDetail() {
       .catch((err) => {
         if (active) setDlError(err instanceof Error ? err.message : String(err));
       });
+    setPresError(null);
+    setPresLoaded(false);
     api
       .listPreservations(id)
       .then((p) => {
-        if (active) setPreservations(p);
+        if (active) {
+          setPreservations(p);
+          setPresLoaded(true);
+        }
       })
-      .catch(() => {
-        /* preservation card degrades silently; matter view unaffected */
+      .catch((err) => {
+        // Surface the failure — an empty card here could hide a lapsing freeze.
+        if (active) setPresError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       active = false;
@@ -174,8 +182,10 @@ export function MatterDetail() {
     }
     try {
       setPreservations(await api.listPreservations(id));
-    } catch {
-      /* ignore */
+      setPresLoaded(true);
+      setPresError(null);
+    } catch (err) {
+      setPresError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -467,6 +477,9 @@ export function MatterDetail() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
+          {presError && (
+            <p className="text-xs text-destructive">保全加载失败：{presError}（请重试，勿据此判断无保全）</p>
+          )}
           {preservations.map((p) => {
             const active = p.status === "ACTIVE" || p.status === "RENEWED";
             const overdue = active && p.daysToExpiry < 0;
@@ -514,7 +527,9 @@ export function MatterDetail() {
               </div>
             );
           })}
-          {preservations.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无保全</p>}
+          {presLoaded && !presError && preservations.length === 0 && (
+            <p className="py-2 text-xs text-muted-foreground">尚无保全</p>
+          )}
 
           {canEdit && (
             <form onSubmit={createPres} className="flex flex-wrap items-end gap-3 pt-2">
