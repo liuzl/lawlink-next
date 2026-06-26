@@ -1,6 +1,6 @@
 /** Property-preservation use cases (DOMAIN-SPEC §6.5, §9.2). */
 import { z } from "zod";
-import { and, asc, eq, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
 import { matters, preservationRenewals, preservations } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -86,20 +86,33 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
     if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
     assertMatterAccess(matter, auth);
 
+    // Renewal extends a STILL-ACTIVE preservation. A lapsed (EXPIRED or
+    // past-expiry) or lifted window must NOT be "renewed" — that would hide the
+    // lapse; re-protecting after a lapse is a NEW preservation (audit honesty).
     if (p.status === "LIFTED") throw new DomainError("INVALID_STATE", "保全已解除，不能续保");
+    if (p.status === "EXPIRED" || p.expiryDate <= now) {
+      throw new DomainError("INVALID_STATE", "保全已到期失效，应重新申请保全，而非续保");
+    }
     if (input.newExpiryDate <= p.expiryDate) {
       throw new DomainError("VALIDATION", "续保到期日必须晚于当前到期日");
     }
-    // A renewal must extend protection into the future — renewing a lapsed
-    // window to another past date would falsely mark it RENEWED/active.
-    if (input.newExpiryDate <= now) {
-      throw new DomainError("VALIDATION", "续保到期日必须晚于今天");
-    }
 
-    await tx
+    // Predicate-guarded update: if a concurrent scan flipped it to EXPIRED (or
+    // it was lifted) between read and write, 0 rows change → reject.
+    const updated = await tx
       .update(preservations)
       .set({ expiryDate: input.newExpiryDate, status: "RENEWED" })
-      .where(eq(preservations.id, input.preservationId));
+      .where(
+        and(
+          eq(preservations.id, input.preservationId),
+          inArray(preservations.status, ["ACTIVE", "RENEWED"]),
+          gte(preservations.expiryDate, now),
+        ),
+      )
+      .returning({ id: preservations.id });
+    if (updated.length === 0) {
+      throw new DomainError("INVALID_STATE", "保全状态已变更（已到期/已解除），不能续保");
+    }
 
     await tx.insert(preservationRenewals).values({
       id: deps.ids.newId(),
