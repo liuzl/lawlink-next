@@ -66,16 +66,12 @@ export async function createInvoiceRequest(deps: Deps, auth: AuthContext, rawInp
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
     assertMatterAccess(m, auth); // matter lead / management
   }
-  // 增值税专用发票（税法）：购方六要素 + 税号必填。
+  // 增值税专用发票（税法）：购方"六要素"——名称 + 税号 + 地址 + 电话 + 开户行 + 账号——全部必填。
   if (input.invoiceType === "SPECIAL") {
-    const missing = [
-      ["buyerTaxNo", input.buyerTaxNo],
-      ["buyerAddress", input.buyerAddress],
-      ["buyerPhone", input.buyerPhone],
-      ["buyerBank", input.buyerBank],
-      ["buyerBankAccount", input.buyerBankAccount],
-    ].some(([, v]) => !v || String(v).trim().length === 0);
-    if (missing) throw new DomainError("VALIDATION", "增值税专用发票须填写税号及购方开户行/账号/地址/电话");
+    const missing = [input.buyerName, input.buyerTaxNo, input.buyerAddress, input.buyerPhone, input.buyerBank, input.buyerBankAccount].some(
+      (v) => !v || String(v).trim().length === 0,
+    );
+    if (missing) throw new DomainError("VALIDATION", "增值税专用发票须填写购方名称、税号、地址、电话、开户行、账号");
   }
   await assertDocsInMatter(deps, input.evidenceDocIds, input.matterId ?? null);
 

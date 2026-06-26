@@ -82,7 +82,13 @@ function Kpi({ label, value }: { label: string; value: number | string }) {
 
 export function Finance() {
   const role = getRole();
+  // Firm-wide finance台账 + invoice processing (approve/reject/issue).
   const allowed = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "FINANCE";
+  // Invoice REQUESTERS (matter leads) — they don't get the firm ledger but can
+  // file + track their own invoice requests.
+  const canRequest = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
+  const canProcess = allowed;
+  const canSeeInvoices = canRequest || canProcess;
 
   const [months, setMonths] = useState(6);
   const [data, setData] = useState<FinanceOverview | null>(null);
@@ -103,6 +109,8 @@ export function Finance() {
   const [buyerPhone, setBuyerPhone] = useState("");
   const [buyerBank, setBuyerBank] = useState("");
   const [buyerBankAccount, setBuyerBankAccount] = useState("");
+  const [noMatterMode, setNoMatterMode] = useState(false);
+  const [noMatterReason, setNoMatterReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [issuingId, setIssuingId] = useState<string | null>(null);
@@ -120,13 +128,16 @@ export function Finance() {
   }, [allowed, months]);
 
   useEffect(() => {
-    if (!allowed) return;
+    if (!canSeeInvoices) return;
     void refreshInvoices();
-    api
-      .listMatters()
-      .then(setMatters)
-      .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [allowed]);
+    if (canRequest) {
+      api
+        .listMatters()
+        .then(setMatters)
+        .catch((err) => setError(err instanceof Error ? err.message : String(err)));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [canSeeInvoices]);
 
   async function refreshInvoices() {
     try {
@@ -152,7 +163,9 @@ export function Finance() {
     setBusy(true);
     try {
       await api.createInvoice({
-        matterId,
+        // 关联案件开票 sends matterId; 无关联案件 sends noMatterReason instead
+        // (the selected matter is used only to source the evidence document).
+        ...(noMatterMode ? { noMatterReason } : { matterId }),
         amount,
         invoiceType,
         invoiceItem,
@@ -174,6 +187,8 @@ export function Finance() {
       setBuyerPhone("");
       setBuyerBank("");
       setBuyerBankAccount("");
+      setNoMatterMode(false);
+      setNoMatterReason("");
       await refreshInvoices();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -205,14 +220,17 @@ export function Finance() {
     }
   }
 
-  const canSubmitInvoice = !busy && !!matterId && !!evidenceDocId && !!amount;
+  // The matter select always sources the evidence doc; in 无关联案件 mode a reason
+  // is required instead of binding the invoice to the matter.
+  const canSubmitInvoice =
+    !busy && !!matterId && !!evidenceDocId && !!amount && (!noMatterMode || !!noMatterReason.trim());
 
-  if (!allowed) {
+  if (!canSeeInvoices) {
     return (
       <div className="space-y-5">
         <h1 className="text-base font-semibold tracking-tight">财务</h1>
         <div className="rounded-sm border border-destructive/30 bg-[#fde8e8] px-3 py-2 text-xs text-destructive">
-          仅管理员 / 主任 / 财务可查看全所财务
+          无权访问财务
         </div>
       </div>
     );
@@ -224,21 +242,23 @@ export function Finance() {
         <div>
           <h1 className="text-base font-semibold tracking-tight">财务</h1>
           <p className="text-xs text-muted-foreground">
-            全所财务台账{data ? ` · 近${data.months}月` : ""}
+            {allowed ? `全所财务台账${data ? ` · 近${data.months}月` : ""}` : "开票申请"}
           </p>
         </div>
-        <Select value={String(months)} onValueChange={(v) => setMonths(Number(v))}>
-          <SelectTrigger className="w-32">
-            <SelectValue placeholder="统计区间" />
-          </SelectTrigger>
-          <SelectContent>
-            {MONTH_OPTIONS.map((m) => (
-              <SelectItem key={m} value={m}>
-                {MONTH_CN[m]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+        {allowed && (
+          <Select value={String(months)} onValueChange={(v) => setMonths(Number(v))}>
+            <SelectTrigger className="w-32">
+              <SelectValue placeholder="统计区间" />
+            </SelectTrigger>
+            <SelectContent>
+              {MONTH_OPTIONS.map((m) => (
+                <SelectItem key={m} value={m}>
+                  {MONTH_CN[m]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {error && (
@@ -246,7 +266,7 @@ export function Finance() {
           {error}
         </div>
       )}
-      {!data && !error && <p className="text-xs text-muted-foreground">加载中…</p>}
+      {allowed && !data && !error && <p className="text-xs text-muted-foreground">加载中…</p>}
 
       {data && (
         <>
@@ -322,6 +342,7 @@ export function Finance() {
 
       <h2 className="text-sm font-semibold tracking-tight pt-2">开票</h2>
 
+      {canRequest && (
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm font-semibold">申请开票</CardTitle>
@@ -332,7 +353,7 @@ export function Finance() {
             className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:items-end"
           >
             <div className="space-y-1.5">
-              <Label>关联案件</Label>
+              <Label>{noMatterMode ? "依据来源案件" : "关联案件"}</Label>
               <Select value={matterId} onValueChange={onMatterChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择案件" />
@@ -345,7 +366,22 @@ export function Finance() {
                   ))}
                 </SelectContent>
               </Select>
+              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                <input type="checkbox" checked={noMatterMode} onChange={(e) => setNoMatterMode(e.target.checked)} />
+                无关联案件开票（仅用所选案件挑选开票依据）
+              </label>
             </div>
+            {noMatterMode && (
+              <div className="space-y-1.5">
+                <Label htmlFor="invoice-nomatter-reason">无关联案件原因</Label>
+                <Input
+                  id="invoice-nomatter-reason"
+                  value={noMatterReason}
+                  onChange={(e) => setNoMatterReason(e.target.value)}
+                  placeholder="说明本次开票为何不关联案件"
+                />
+              </div>
+            )}
             <div className="space-y-1.5">
               <Label>开票依据</Label>
               <Select value={evidenceDocId} onValueChange={setEvidenceDocId}>
@@ -466,6 +502,7 @@ export function Finance() {
           </form>
         </CardContent>
       </Card>
+      )}
 
       <Card>
         <Table>
@@ -506,7 +543,9 @@ export function Finance() {
                   {r.requestedAt.slice(0, 10)}
                 </TableCell>
                 <TableCell className="text-right">
-                  {r.status === "PENDING" ? (
+                  {!canProcess ? (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  ) : r.status === "PENDING" ? (
                     <div className="flex justify-end gap-2">
                       <Button
                         variant="outline"
