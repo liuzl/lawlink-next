@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Banknote, CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
+import { Archive, Banknote, CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
 import {
   api,
   getRole,
@@ -15,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import {
@@ -164,6 +165,11 @@ export function MatterDetail() {
   const [feeType, setFeeType] = useState("RECEIVED");
   const [feeAmount, setFeeAmount] = useState("");
   const [feePayer, setFeePayer] = useState("");
+  const [archiveChecklist, setArchiveChecklist] = useState<string[] | null>(null);
+  const [archiveChecked, setArchiveChecked] = useState<Record<string, boolean>>({});
+  const [archiveSummary, setArchiveSummary] = useState("");
+  const [archiveForceReason, setArchiveForceReason] = useState("");
+  const [archiveError, setArchiveError] = useState<string | null>(null);
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
 
@@ -223,6 +229,11 @@ export function MatterDetail() {
     api.getFinance(id).then((f) => {
       if (active) setFinance(f);
     }).catch(() => {});
+    setArchiveChecklist(null);
+    setArchiveError(null);
+    api.getArchiveChecklist(id).then((c) => {
+      if (active) setArchiveChecklist(c.required);
+    }).catch(() => {});
     return () => {
       active = false;
     };
@@ -260,6 +271,30 @@ export function MatterDetail() {
     try {
       setFinance(await api.getFinance(id));
     } catch { /* ignore */ }
+    try {
+      setArchiveChecklist((await api.getArchiveChecklist(id)).required);
+    } catch { /* ignore */ }
+  }
+
+  async function doArchive() {
+    if (!archiveSummary) return;
+    setBusy(true);
+    setArchiveError(null);
+    try {
+      await api.archiveMatter(id, {
+        summary: archiveSummary,
+        checklist: archiveChecked,
+        forceReason: archiveForceReason || undefined,
+      });
+      setArchiveSummary("");
+      setArchiveForceReason("");
+      setArchiveChecked({});
+      await refresh();
+    } catch (err) {
+      setArchiveError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function addTask(e: FormEvent) {
@@ -1043,6 +1078,67 @@ export function MatterDetail() {
               )}
             </>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Archive className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            归档
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {matter.status === "ARCHIVED" ? (
+            <div className="flex items-center gap-2">
+              <Badge variant="secondary">已归档</Badge>
+              <span className="text-xs text-muted-foreground">案件已归档，处于只读状态。</span>
+            </div>
+          ) : canEdit && archiveChecklist ? (
+            <>
+              <div className="space-y-2">
+                <Label>结案完整性核对</Label>
+                {archiveChecklist.length === 0 && (
+                  <p className="py-1 text-xs text-muted-foreground">无核对项</p>
+                )}
+                {archiveChecklist.map((item) => (
+                  <label key={item} className="flex items-center gap-2 text-sm">
+                    <Checkbox
+                      checked={!!archiveChecked[item]}
+                      onCheckedChange={(v) =>
+                        setArchiveChecked((prev) => ({ ...prev, [item]: v === true }))
+                      }
+                    />
+                    {item}
+                  </label>
+                ))}
+              </div>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label>结案小结</Label>
+                  <Input
+                    value={archiveSummary}
+                    onChange={(e) => setArchiveSummary(e.target.value)}
+                    placeholder="结案小结"
+                    className="w-72"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>强制归档理由（仅当核对项缺失时需要）</Label>
+                  <Input
+                    value={archiveForceReason}
+                    onChange={(e) => setArchiveForceReason(e.target.value)}
+                    placeholder="可选"
+                    className="w-72"
+                  />
+                </div>
+                <Button onClick={doArchive} disabled={busy || !archiveSummary}>
+                  {busy ? "归档中…" : "归档"}
+                </Button>
+              </div>
+              {archiveError && <p className="text-xs text-destructive">{archiveError}</p>}
+            </>
+          ) : null}
         </CardContent>
       </Card>
     </div>

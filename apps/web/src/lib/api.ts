@@ -281,4 +281,11 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ plans }),
     }),
+  getArchiveChecklist: (matterId: string) =>
+    req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
+  archiveMatter: (matterId: string, body: Record<string, unknown>) =>
+    req<{ status: string; missingItems: string[]; forced: boolean }>(`/matters/${matterId}/archive`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };
