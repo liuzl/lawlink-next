@@ -56,6 +56,12 @@ import {
   getReport,
   getSchedule,
   getFinanceOverview,
+  createInvoiceRequest,
+  approveInvoice,
+  rejectInvoice,
+  issueInvoice,
+  listInvoiceRequests,
+  getInvoiceRequest,
   listNotifications,
   unreadNotificationCount,
   markNotificationRead,
@@ -745,6 +751,75 @@ notify
   .command("read-all")
   .option("--token <token>")
   .action((opts) => run(async () => markAllNotificationsRead(buildDeps(), await resolveAuth(opts.token))));
+
+// ── invoice (开票) ─────────────────────────────────────────────────────────────
+const invoice = program.command("invoice").description("开票工作流");
+invoice
+  .command("create")
+  .requiredOption("--amount <a>")
+  .requiredOption("--evidence-doc-id <id...>", "开票依据 Document id（可多个，必传）", [])
+  .option("--matter-id <id>")
+  .option("--matterless-reason <r>", "无关联案件原因（无 matter 时必填）")
+  .option("--invoice-type <t>", "PLAIN|SPECIAL")
+  .option("--invoice-item <t>", "LAWYER_FEE|CONSULTING_FEE|AGENCY_FEE|OTHER")
+  .option("--buyer-name <n>")
+  .option("--buyer-tax-no <n>")
+  .option("--buyer-address <a>")
+  .option("--buyer-phone <p>")
+  .option("--buyer-bank <b>")
+  .option("--buyer-bank-account <a>")
+  .option("--request-note <n>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      createInvoiceRequest(buildDeps(), await resolveAuth(opts.token), {
+        amount: opts.amount,
+        evidenceDocIds: opts.evidenceDocId,
+        matterId: opts.matterId,
+        noMatterReason: opts.matterlessReason,
+        invoiceType: opts.invoiceType,
+        invoiceItem: opts.invoiceItem,
+        buyerName: opts.buyerName,
+        buyerTaxNo: opts.buyerTaxNo,
+        buyerAddress: opts.buyerAddress,
+        buyerPhone: opts.buyerPhone,
+        buyerBank: opts.buyerBank,
+        buyerBankAccount: opts.buyerBankAccount,
+        requestNote: opts.requestNote,
+      }),
+    ),
+  );
+invoice
+  .command("list")
+  .option("--status <s>", "PENDING|APPROVED|ISSUED|REJECTED")
+  .option("--token <token>")
+  .action((opts) => run(async () => listInvoiceRequests(buildDeps(), await resolveAuth(opts.token), { status: opts.status })));
+invoice
+  .command("show")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => getInvoiceRequest(buildDeps(), await resolveAuth(opts.token), { invoiceRequestId: opts.id })));
+invoice
+  .command("approve")
+  .requiredOption("--id <id>")
+  .option("--note <n>")
+  .option("--token <token>")
+  .action((opts) => run(async () => approveInvoice(buildDeps(), await resolveAuth(opts.token), { invoiceRequestId: opts.id, processNote: opts.note })));
+invoice
+  .command("reject")
+  .requiredOption("--id <id>")
+  .option("--note <n>")
+  .option("--token <token>")
+  .action((opts) => run(async () => rejectInvoice(buildDeps(), await resolveAuth(opts.token), { invoiceRequestId: opts.id, processNote: opts.note })));
+invoice
+  .command("issue")
+  .description("开具：回填发票号 + 上传电子发票 APPROVED → ISSUED")
+  .requiredOption("--id <id>")
+  .requiredOption("--invoice-no <n>")
+  .requiredOption("--invoice-file-id <id>", "电子发票 Document id")
+  .option("--contract-scan-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => issueInvoice(buildDeps(), await resolveAuth(opts.token), { invoiceRequestId: opts.id, invoiceNo: opts.invoiceNo, invoiceFileId: opts.invoiceFileId, contractScanId: opts.contractScanId })));
 
 // ── schedule (日程) ────────────────────────────────────────────────────────────
 program

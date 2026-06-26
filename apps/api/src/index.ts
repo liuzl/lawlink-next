@@ -57,6 +57,12 @@ import {
   getReport,
   getSchedule,
   getFinanceOverview,
+  createInvoiceRequest,
+  approveInvoice,
+  rejectInvoice,
+  issueInvoice,
+  listInvoiceRequests,
+  getInvoiceRequest,
   listNotifications,
   unreadNotificationCount,
   markNotificationRead,
@@ -601,6 +607,53 @@ app.post("/api/notifications/:id/read", requireAuth, async (c) => {
 app.get("/api/schedule", requireAuth, async (c) => {
   try {
     return c.json(await getSchedule(buildDeps(), c.get("auth"), { from: c.req.query("from"), to: c.req.query("to") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── invoices (开票工作流) ──────────────────────────────────────────────────────
+app.get("/api/invoices", requireAuth, async (c) => {
+  try {
+    return c.json(await listInvoiceRequests(buildDeps(), c.get("auth"), { status: c.req.query("status") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/invoices", requireAuth, async (c) => {
+  try {
+    return c.json(await createInvoiceRequest(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/invoices/:id", requireAuth, async (c) => {
+  try {
+    return c.json(await getInvoiceRequest(buildDeps(), c.get("auth"), { invoiceRequestId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/invoices/:id/approve", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await approveInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/invoices/:id/reject", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await rejectInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/invoices/:id/issue", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await issueInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

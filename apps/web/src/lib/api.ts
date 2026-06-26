@@ -224,6 +224,20 @@ export interface SmsRow {
   processed: boolean;
   parsed: ParsedSms | null;
 }
+export interface InvoiceRow {
+  id: string;
+  matterId: string | null;
+  noMatterReason: string | null;
+  amount: string;
+  status: string;
+  invoiceType: string | null;
+  invoiceItem: string | null;
+  buyerName: string | null;
+  invoiceNo: string | null;
+  requestedById: string;
+  requestedAt: string;
+  processNote: string | null;
+}
 export interface ScheduleItem {
   kind: "HEARING" | "DEADLINE" | "PRESERVATION" | "TASK";
   id: string;
@@ -512,6 +526,16 @@ export const api = {
   },
   getFinanceOverview: (months?: number) =>
     req<FinanceOverview>(`/finance/overview${months ? `?months=${months}` : ""}`),
+  listInvoices: (status?: string) =>
+    req<InvoiceRow[]>(`/invoices${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  createInvoice: (body: Record<string, unknown>) =>
+    req<{ id: string }>("/invoices", { method: "POST", body: JSON.stringify(body) }),
+  approveInvoice: (id: string, processNote?: string) =>
+    req<{ status: string }>(`/invoices/${id}/approve`, { method: "POST", body: JSON.stringify({ processNote }) }),
+  rejectInvoice: (id: string, processNote?: string) =>
+    req<{ status: string }>(`/invoices/${id}/reject`, { method: "POST", body: JSON.stringify({ processNote }) }),
+  issueInvoice: (id: string, body: { invoiceNo: string; invoiceFileId: string; contractScanId?: string }) =>
+    req<{ status: string }>(`/invoices/${id}/issue`, { method: "POST", body: JSON.stringify(body) }),
   getReport: (params: { preset?: string; start?: string; end?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.preset) q.set("preset", params.preset);
