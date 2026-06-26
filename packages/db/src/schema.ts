@@ -334,7 +334,7 @@ export const archiveRecords = sqliteTable(
     archivedById: text("archived_by_id").notNull(),
     archivedAt: integer("archived_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("ArchiveRecord_matter_idx").on(t.matterId)],
+  (t) => [uniqueIndex("ArchiveRecord_matter_uq").on(t.matterId)],
 );
 
 /** Atomic named counters (internalCode sequences, etc.). */

@@ -1,6 +1,6 @@
 /** Archive (归档) — completeness gating + read-only lock (DOMAIN-SPEC §6.6, §M9). */
 import { z } from "zod";
-import { eq } from "drizzle-orm";
+import { and, eq, ne } from "drizzle-orm";
 import { archiveRecords, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -21,11 +21,12 @@ export async function getArchiveChecklist(deps: Deps, auth: AuthContext, rawInpu
 
 export const ArchiveMatterInput = z.object({
   matterId: z.string().min(1),
-  summary: z.string().min(1).max(5000),
+  summary: z.string().trim().min(1).max(5000),
   /** item name -> present? */
   checklist: z.record(z.string(), z.boolean()).default({}),
-  /** Required when archiving despite missing required items (audited override). */
-  forceReason: z.string().max(500).optional(),
+  /** Required when archiving despite missing required items (audited override).
+   * Trimmed + non-empty so " " can't authorize a forced archive. */
+  forceReason: z.string().trim().min(1).max(500).optional(),
 });
 
 /**
@@ -46,7 +47,24 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
       .limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
     assertMatterAccess(m, auth);
-    if (m.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档");
+
+    // Idempotent: an already-archived matter returns its existing record rather
+    // than failing a retry.
+    if (m.status === "ARCHIVED") {
+      const [existing] = await tx
+        .select()
+        .from(archiveRecords)
+        .where(eq(archiveRecords.matterId, input.matterId))
+        .limit(1);
+      return {
+        matterId: input.matterId,
+        archiveId: existing?.id ?? null,
+        status: "ARCHIVED" as const,
+        missingItems: existing ? (JSON.parse(existing.missingItems) as string[]) : [],
+        forced: !!existing?.forceReason,
+        alreadyArchived: true,
+      };
+    }
 
     const required = requiredChecklist(m.category as MatterCategory);
     const missing = required.filter((item) => input.checklist[item] !== true);
@@ -55,6 +73,28 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
         "VALIDATION",
         `归档材料缺 ${missing.length} 项必备项（${missing.join("、")}）。如确认强制归档，请填写强制归档理由。`,
       );
+    }
+
+    // Atomically claim the archive transition (race-safe single archive).
+    const claimed = await tx
+      .update(matters)
+      .set({ status: "ARCHIVED" })
+      .where(and(eq(matters.id, input.matterId), ne(matters.status, "ARCHIVED")))
+      .returning({ id: matters.id });
+    if (claimed.length === 0) {
+      const [existing] = await tx
+        .select()
+        .from(archiveRecords)
+        .where(eq(archiveRecords.matterId, input.matterId))
+        .limit(1);
+      return {
+        matterId: input.matterId,
+        archiveId: existing?.id ?? null,
+        status: "ARCHIVED" as const,
+        missingItems: [],
+        forced: !!existing?.forceReason,
+        alreadyArchived: true,
+      };
     }
 
     const id = deps.ids.newId();
@@ -68,7 +108,6 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
       archivedById: auth.userId,
       archivedAt: now,
     });
-    await tx.update(matters).set({ status: "ARCHIVED" }).where(eq(matters.id, input.matterId));
 
     return {
       matterId: input.matterId,
@@ -76,6 +115,7 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
       status: "ARCHIVED" as const,
       missingItems: missing,
       forced: missing.length > 0,
+      alreadyArchived: false,
     };
   });
 }

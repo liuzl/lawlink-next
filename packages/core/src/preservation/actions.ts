@@ -1,6 +1,6 @@
 /** Property-preservation use cases (DOMAIN-SPEC §6.5, §9.2). */
 import { z } from "zod";
-import { and, asc, eq, gte, inArray, lt } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, notInArray } from "drizzle-orm";
 import { matters, preservationRenewals, preservations } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -176,11 +176,21 @@ export async function listMatterPreservations(
  */
 export async function scanPreservationExpiry(deps: Deps): Promise<{ expired: number }> {
   const now = deps.clock.now();
+  // Skip preservations of ARCHIVED matters — those are read-only (§6.6); their
+  // status is frozen at closing and must not be mutated by the system job.
+  const archivedMatters = deps.db
+    .select({ id: matters.id })
+    .from(matters)
+    .where(eq(matters.status, "ARCHIVED"));
   const updated = await deps.db
     .update(preservations)
     .set({ status: "EXPIRED" })
     .where(
-      and(inArray(preservations.status, ["ACTIVE", "RENEWED"]), lt(preservations.expiryDate, now)),
+      and(
+        inArray(preservations.status, ["ACTIVE", "RENEWED"]),
+        lt(preservations.expiryDate, now),
+        notInArray(preservations.matterId, archivedMatters),
+      ),
     )
     .returning({ id: preservations.id });
   return { expired: updated.length };
