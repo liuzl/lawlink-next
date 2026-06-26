@@ -15,7 +15,7 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { documents, invoiceRequests, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type InvoiceRequestStatus } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, assertMatterOwnerAccess } from "../matter/access.js";
 import { enqueueNotification } from "../notification/actions.js";
 
 const AMOUNT = z.string().regex(/^\d+(\.\d{1,2})?$/, "金额格式应为最多两位小数");
@@ -64,7 +64,7 @@ export async function createInvoiceRequest(deps: Deps, auth: AuthContext, rawInp
   if (input.matterId) {
     const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    await assertMatterAccess(deps.db, m, auth); // matter lead / management
+    assertMatterOwnerAccess(m, auth); // 主办 (owner) or management — matches the read side
   }
   // 增值税专用发票（税法）：购方"六要素"——名称 + 税号 + 地址 + 电话 + 开户行 + 账号——全部必填。
   if (input.invoiceType === "SPECIAL") {

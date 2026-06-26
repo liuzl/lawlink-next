@@ -50,6 +50,21 @@ export async function assertMatterAccess(
 }
 
 /**
+ * Owner-or-management access (NOT membership). Some matter mutations are
+ * finance-sensitive enough that they must stay with the 主办 (owner/LEAD) or
+ * management, NOT the wider team — e.g. commission plans (who gets paid) and
+ * invoice requests. This is the pre-membership semantics of assertMatterAccess,
+ * kept as an explicit guard so those sites don't silently widen to CO_LEAD/
+ * ASSISTANT members. Synchronous — owner/management need no roster lookup.
+ */
+export function canManageMatterAsOwner(matter: { ownerId: string }, auth: AuthContext): boolean {
+  return isManagement(auth) || (auth.role === "LAWYER" && matter.ownerId === auth.userId);
+}
+export function assertMatterOwnerAccess(matter: { ownerId: string }, auth: AuthContext): void {
+  if (!canManageMatterAsOwner(matter, auth)) throw new DomainError("NOT_FOUND", "案件不存在");
+}
+
+/**
  * A `matters`-row visibility predicate for aggregate views that scan across many
  * matters (matter list, schedule, dashboard) — the single source of truth so
  * those surfaces agree with assertMatterAccess. Apply the result to a query whose

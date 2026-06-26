@@ -13,7 +13,7 @@ import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { matterProcedures, matters, smsMessages } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, canAccessMatter, matterVisibilityCondition } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 import { addHearing } from "../activity/actions.js";
 import { addDeadline } from "../deadline/actions.js";
@@ -112,18 +112,20 @@ export const ListSmsInput = z.object({ processed: z.coerce.boolean().optional() 
 
 export async function listSms(deps: Deps, auth: AuthContext, rawInput?: unknown) {
   const input = ListSmsInput.parse(rawInput ?? {});
-  // Visibility: own received messages + (for a LAWYER) messages matched to a
-  // matter they own; management sees all. ASSISTANT/FINANCE: own received only.
-  let visibility;
-  if (isManagement(auth)) {
-    visibility = undefined;
-  } else if (auth.role === "LAWYER") {
-    const ownMatters = deps.db.select({ id: matters.id }).from(matters).where(eq(matters.ownerId, auth.userId));
-    visibility = inArray(smsMessages.matchedMatterId, ownMatters);
-    // OR own received — combined below.
-  }
+  // Visibility: own received messages + messages matched to a matter the caller
+  // can access (owned OR team member, per matterVisibilityCondition); management
+  // sees all. FINANCE / non-member: own received only.
   const own = eq(smsMessages.receivedById, auth.userId);
-  const base = visibility ? or(own, visibility) : isManagement(auth) ? undefined : own;
+  const vis = await matterVisibilityCondition(deps.db, auth);
+  let base;
+  if (isManagement(auth)) {
+    base = undefined; // sees all
+  } else if (vis === null) {
+    base = own; // no visible matters → only own received SMS
+  } else {
+    const visibleMatters = deps.db.select({ id: matters.id }).from(matters).where(vis);
+    base = or(own, inArray(smsMessages.matchedMatterId, visibleMatters));
+  }
   const processedFilter = input.processed === undefined ? undefined : eq(smsMessages.processed, input.processed);
   const rows = await deps.db
     .select()
@@ -134,17 +136,17 @@ export async function listSms(deps: Deps, auth: AuthContext, rawInput?: unknown)
   return rows.map(rowWithParsed);
 }
 
-/** Load an SMS the caller may see (receiver, owner of the matched matter, or management). */
+/** Load an SMS the caller may see (receiver, a member of the matched matter, or management). */
 async function visibleSms(deps: Deps, auth: AuthContext, smsId: string) {
   const [r] = await deps.db.select().from(smsMessages).where(eq(smsMessages.id, smsId)).limit(1);
   if (!r) throw new DomainError("NOT_FOUND", "短信不存在");
   if (isManagement(auth) || r.receivedById === auth.userId) return r;
-  // Same predicate as listSms: only a LAWYER who OWNS the matched matter gets the
-  // SMS via the matter (ASSISTANT/FINANCE: own-received only). Keeps list and get
-  // — and the mutations gated by visibleSms — consistent.
-  if (auth.role === "LAWYER" && r.matchedMatterId) {
-    const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matchedMatterId)).limit(1);
-    if (m && m.ownerId === auth.userId) return r;
+  // Same predicate as listSms: the caller gets the SMS via its matched matter if
+  // they can access that matter (owner OR team member). Keeps list and get — and
+  // the generate-hearing/deadline mutations gated by visibleSms — consistent.
+  if (r.matchedMatterId) {
+    const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matchedMatterId)).limit(1);
+    if (m && (await canAccessMatter(deps.db, m, auth))) return r;
   }
   throw new DomainError("NOT_FOUND", "短信不存在");
 }

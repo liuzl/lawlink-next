@@ -4,7 +4,7 @@ import { and, asc, eq } from "drizzle-orm";
 import { commissionPlans, feeEntries, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterOwnerAccess } from "../matter/access.js";
 import { fromCents, percentOfCents, toCents } from "./money.js";
 
 const AMOUNT = z.string().regex(/^\d+(\.\d{1,2})?$/, "金额格式应为最多两位小数");
@@ -42,7 +42,7 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
   const input = SetCommissionPlanInput.parse(rawInput);
   const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  await assertMatterAccess(deps.db, m, auth); // management or owner (lead)
+  assertMatterOwnerAccess(m, auth); // owner (主办) or management — NOT team members
 
   // Quantize to 2 decimals FIRST, then validate the sum in the same
   // representation that is persisted (so stored percents can't drift past 100%).
