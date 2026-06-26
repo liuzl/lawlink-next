@@ -245,13 +245,21 @@ export const StampSealInput = z.object({
 export async function stampSealRequest(deps: Deps, auth: AuthContext, rawInput: unknown) {
   const input = StampSealInput.parse(rawInput);
   const r = await loadRequest(deps, input.sealRequestId);
-  // The seal holder (same authorization as the approver) records the stamping.
-  await assertCanApprove(deps, auth, r.sealType as SealType);
+  // Recording the physical stamping + attaching the official scan is a document
+  // write, so it requires MATTER ACCESS to the seal's matter — not merely the
+  // approver role. (Approval already happened to reach APPROVED.) This closes the
+  // hole where a non-owner approver, e.g. FINANCE, who has no matter-body access,
+  // binds a guessed same-matter Document id they couldn't otherwise read. Every
+  // document in the matter is reachable to a matter-access user, so the
+  // same-matter scan is legitimately theirs to attach. ADMIN/management pass.
+  if (!r.matterId) throw new DomainError("INVALID_STATE", "用印申请缺少关联案件，无法登记盖章");
+  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matterId)).limit(1);
+  if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
+  assertMatterAccess(m, auth);
   const stampedDoc = await loadDocument(deps, input.stampedDocId); // 盖章后扫描件必补
-  // The official post-stamp record must belong to the SAME matter as the seal
-  // (a matter-less seal needs a matter-less scan) — fail closed, so a guessed
-  // Document id from an unrelated/inaccessible case can't be bound as the record.
-  if ((r.matterId ?? null) !== (stampedDoc.matterId ?? null)) {
+  // The official post-stamp record must belong to the SAME matter as the seal —
+  // fail closed, so a Document id from another case can't be bound as the record.
+  if (r.matterId !== stampedDoc.matterId) {
     throw new DomainError("VALIDATION", "盖章后扫描件须与本用印申请属于同一案件");
   }
   try {
