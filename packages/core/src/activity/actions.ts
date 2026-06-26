@@ -5,8 +5,10 @@ import { hearings, matterProcedures, matters, notes, tasks } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterWritable } from "../matter/guards.js";
 
-async function assertMatterEditable(db: Deps["db"], auth: AuthContext, matterId: string) {
+/** Read access (archived matters are still viewable). */
+async function assertMatterReadable(db: Deps["db"], auth: AuthContext, matterId: string) {
   const [m] = await db
     .select({ ownerId: matters.ownerId })
     .from(matters)
@@ -16,7 +18,7 @@ async function assertMatterEditable(db: Deps["db"], auth: AuthContext, matterId:
   assertMatterAccess(m, auth);
 }
 
-/** Resolve an ENGAGED procedure's matter and assert edit access (§3.2). */
+/** Resolve an ENGAGED procedure's matter and assert WRITE access (§3.2, §6.6). */
 async function engagedProcedureMatter(db: Deps["db"], auth: AuthContext, procedureId: string) {
   const [p] = await db
     .select({ matterId: matterProcedures.matterId, engagement: matterProcedures.engagement })
@@ -27,7 +29,7 @@ async function engagedProcedureMatter(db: Deps["db"], auth: AuthContext, procedu
   if (p.engagement === "INFORMATIONAL") {
     throw new DomainError("VALIDATION", "前序参考程序不进入日程聚合，不能添加开庭");
   }
-  await assertMatterEditable(db, auth, p.matterId);
+  await assertMatterWritable(db, auth, p.matterId);
   return p.matterId;
 }
 
@@ -43,7 +45,7 @@ export const AddTaskInput = z.object({
 export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = AddTaskInput.parse(rawInput);
-  await assertMatterEditable(deps.db, auth, input.matterId);
+  await assertMatterWritable(deps.db, auth, input.matterId);
   const id = deps.ids.newId();
   await deps.db.insert(tasks).values({
     id,
@@ -60,7 +62,7 @@ export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) 
 }
 
 export async function listMatterTasks(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
-  await assertMatterEditable(deps.db, auth, rawInput.matterId);
+  await assertMatterReadable(deps.db, auth, rawInput.matterId);
   return await deps.db
     .select()
     .from(tasks)
@@ -75,7 +77,7 @@ export async function completeTask(deps: Deps, auth: AuthContext, rawInput: unkn
   const { taskId } = CompleteTaskInput.parse(rawInput);
   const [t] = await deps.db.select({ matterId: tasks.matterId }).from(tasks).where(eq(tasks.id, taskId)).limit(1);
   if (!t) throw new DomainError("NOT_FOUND", "任务不存在");
-  await assertMatterEditable(deps.db, auth, t.matterId);
+  await assertMatterWritable(deps.db, auth, t.matterId);
   await deps.db.update(tasks).set({ completed: true, completedAt: deps.clock.now() }).where(eq(tasks.id, taskId));
   return { id: taskId, completed: true };
 }
@@ -92,7 +94,7 @@ export const AddNoteInput = z.object({
 export async function addNote(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = AddNoteInput.parse(rawInput);
-  await assertMatterEditable(deps.db, auth, input.matterId);
+  await assertMatterWritable(deps.db, auth, input.matterId);
   const now = deps.clock.now();
   const id = deps.ids.newId();
   await deps.db.insert(notes).values({
@@ -109,7 +111,7 @@ export async function addNote(deps: Deps, auth: AuthContext, rawInput: unknown) 
 }
 
 export async function listMatterNotes(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
-  await assertMatterEditable(deps.db, auth, rawInput.matterId);
+  await assertMatterReadable(deps.db, auth, rawInput.matterId);
   return await deps.db
     .select()
     .from(notes)
@@ -148,7 +150,7 @@ export async function addHearing(deps: Deps, auth: AuthContext, rawInput: unknow
 }
 
 export async function listMatterHearings(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
-  await assertMatterEditable(deps.db, auth, rawInput.matterId);
+  await assertMatterReadable(deps.db, auth, rawInput.matterId);
   // ENGAGED procedures only (§3.2). Bind the join on BOTH ids so a drifted row
   // (hearing.matterId = A, procedure from matter B) can't leak across matters.
   return await deps.db

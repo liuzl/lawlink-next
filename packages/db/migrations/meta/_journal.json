@@ -57,6 +57,13 @@
       "when": 1782466133414,
       "tag": "0007_nifty_wallop",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1782467308754,
+      "tag": "0008_dusty_union_jack",
+      "breakpoints": true
     }
   ]
 }

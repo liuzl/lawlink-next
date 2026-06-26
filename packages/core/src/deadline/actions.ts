@@ -27,12 +27,13 @@ async function authorizedMatterOfProcedure(
   }
 
   const [matter] = await db
-    .select({ category: matters.category, ownerId: matters.ownerId })
+    .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, proc.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(matter, auth);
+  if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读，不能修改期限");
   return { matterId: proc.matterId, category: matter.category as MatterCategory };
 }
 
@@ -189,12 +190,13 @@ export async function completeDeadline(deps: Deps, auth: AuthContext, rawInput: 
   if (!dl) throw new DomainError("NOT_FOUND", "期限不存在");
 
   const [matter] = await deps.db
-    .select({ ownerId: matters.ownerId })
+    .select({ ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, dl.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(matter, auth);
+  if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
 
   await deps.db
     .update(deadlines)

@@ -15,6 +15,8 @@ import {
   addNote,
   addProcedure,
   addTask,
+  archiveMatter,
+  getArchiveChecklist,
   applyDeadlineRules,
   completeDeadline,
   completeTask,
@@ -359,6 +361,34 @@ deadline
   .option("--token <token>", "登录态")
   .action((opts) =>
     run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
+  );
+
+// ── archive ───────────────────────────────────────────────────────────────────
+const archive = program.command("archive").description("归档");
+archive
+  .command("checklist")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => getArchiveChecklist(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
+archive
+  .command("do")
+  .description("归档案件（仅 ADMIN/PRINCIPAL_LAWYER）")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--summary <s>", "结案小结")
+  .option("--checked <item...>", "已具备的必备项名称", [])
+  .option("--force-reason <r>", "缺料强制归档理由")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      const checklist: Record<string, boolean> = {};
+      for (const item of opts.checked as string[]) checklist[item] = true;
+      return archiveMatter(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        summary: opts.summary,
+        checklist,
+        forceReason: opts.forceReason,
+      });
+    }),
   );
 
 // ── finance ───────────────────────────────────────────────────────────────────

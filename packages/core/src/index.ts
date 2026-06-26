@@ -11,3 +11,5 @@ export * from "./dashboard/index.js";
 export * from "./client/index.js";
 export * from "./activity/index.js";
 export * from "./finance/index.js";
+export * from "./matter/guards.js";
+export * from "./archive/index.js";

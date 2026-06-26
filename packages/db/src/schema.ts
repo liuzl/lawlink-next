@@ -321,6 +321,22 @@ export const preservationRenewals = sqliteTable(
   (t) => [index("PreservationRenewal_pres_idx").on(t.preservationId)],
 );
 
+/** Archive record (归档, DOMAIN-SPEC §6.6, §M9). */
+export const archiveRecords = sqliteTable(
+  "ArchiveRecord",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    summary: text("summary").notNull(),
+    checklistJson: text("checklist_json").notNull().default("{}"),
+    missingItems: text("missing_items").notNull().default("[]"),
+    forceReason: text("force_reason"),
+    archivedById: text("archived_by_id").notNull(),
+    archivedAt: integer("archived_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("ArchiveRecord_matter_idx").on(t.matterId)],
+);
+
 /** Atomic named counters (internalCode sequences, etc.). */
 export const counters = sqliteTable("Counter", {
   key: text("key").primaryKey(),

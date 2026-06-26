@@ -14,6 +14,8 @@ import {
   addContact,
   addHearing,
   addNote,
+  archiveMatter,
+  getArchiveChecklist,
   addProcedure,
   addTask,
   applyDeadlineRules,
@@ -280,6 +282,22 @@ app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(await addHearing(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/archive-checklist", requireAuth, async (c) => {
+  try {
+    return c.json(await getArchiveChecklist(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/archive", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await archiveMatter(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

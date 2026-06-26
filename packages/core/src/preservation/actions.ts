@@ -5,6 +5,7 @@ import { matters, preservationRenewals, preservations } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterWritable } from "../matter/guards.js";
 import { DEFAULT_DURATION_DAYS, addDays, type PreservationPropertyType } from "./rules.js";
 
 async function assertCanEditMatter(db: Deps["db"], auth: AuthContext, matterId: string) {
@@ -34,7 +35,7 @@ export const CreatePreservationInput = z.object({
 export async function createPreservation(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER");
   const input = CreatePreservationInput.parse(rawInput);
-  await assertCanEditMatter(deps.db, auth, input.matterId);
+  await assertMatterWritable(deps.db, auth, input.matterId);
 
   const durationDays =
     input.durationDays ?? DEFAULT_DURATION_DAYS[input.propertyType as PreservationPropertyType];
@@ -79,12 +80,13 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
     if (!p) throw new DomainError("NOT_FOUND", "保全不存在");
 
     const [matter] = await tx
-      .select({ ownerId: matters.ownerId })
+      .select({ ownerId: matters.ownerId, status: matters.status })
       .from(matters)
       .where(eq(matters.id, p.matterId))
       .limit(1);
     if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
     assertMatterAccess(matter, auth);
+    if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
 
     // Renewal extends a STILL-ACTIVE preservation. A lapsed (EXPIRED or
     // past-expiry) or lifted window must NOT be "renewed" — that would hide the
@@ -140,7 +142,7 @@ export async function liftPreservation(deps: Deps, auth: AuthContext, rawInput: 
     .where(eq(preservations.id, preservationId))
     .limit(1);
   if (!p) throw new DomainError("NOT_FOUND", "保全不存在");
-  await assertCanEditMatter(deps.db, auth, p.matterId);
+  await assertMatterWritable(deps.db, auth, p.matterId);
 
   await deps.db.update(preservations).set({ status: "LIFTED" }).where(eq(preservations.id, preservationId));
   return { id: preservationId, status: "LIFTED" as const };
