@@ -103,6 +103,31 @@ export const matterProcedures = sqliteTable(
   (t) => [uniqueIndex("MatterProcedure_matter_order_uq").on(t.matterId, t.order)],
 );
 
+/** A deadline on a procedure (DOMAIN-SPEC §6.4, §9.1). May be auto-computed. */
+export const deadlines = sqliteTable(
+  "Deadline",
+  {
+    id: text("id").primaryKey(),
+    procedureId: text("procedure_id").notNull(),
+    matterId: text("matter_id").notNull(),
+    // LIMITATION|EVIDENCE|APPEAL|PERFORMANCE|RESPONSE|ENFORCEMENT|ARBITRATION_SET_ASIDE|RETRIAL_APPLICATION|CUSTOM
+    category: text("category").notNull().default("CUSTOM"),
+    title: text("title").notNull(),
+    dueAt: integer("due_at", { mode: "timestamp" }).notNull(),
+    basis: text("basis"),
+    // event the deadline was derived from (auto-computed only), null for manual
+    sourceEvent: text("source_event"),
+    autoComputed: integer("auto_computed", { mode: "boolean" }).notNull().default(false),
+    completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("Deadline_matter_idx").on(t.matterId),
+    index("Deadline_due_idx").on(t.dueAt, t.completed),
+  ],
+);
+
 /** Atomic named counters (internalCode sequences, etc.). */
 export const counters = sqliteTable("Counter", {
   key: text("key").primaryKey(),

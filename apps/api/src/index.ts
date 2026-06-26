@@ -11,11 +11,14 @@ import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 import {
   addProcedure,
+  applyDeadlineRules,
+  completeDeadline,
   convertIntake,
   createIntake,
   declineIntake,
   getMatter,
   listIntakes,
+  listMatterDeadlines,
   listMatters,
   login,
   requireJwtSecret,
@@ -156,6 +159,34 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
       await addProcedure(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/deadlines", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterDeadlines(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(
+      await applyDeadlineRules(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }),
+      201,
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/deadlines/:id/complete", requireAuth, async (c) => {
+  try {
+    return c.json(await completeDeadline(buildDeps(), c.get("auth"), { deadlineId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

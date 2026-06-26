@@ -11,11 +11,14 @@ import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
   addProcedure,
+  applyDeadlineRules,
+  completeDeadline,
   convertIntake,
   createIntake,
   declineIntake,
   getMatter,
   hashPassword,
+  listMatterDeadlines,
   listMatters,
   login,
   requireJwtSecret,
@@ -242,6 +245,42 @@ matter
         handlingAgency: opts.handlingAgency,
       }),
     ),
+  );
+
+// ── deadline ──────────────────────────────────────────────────────────────
+const deadline = program.command("deadline").description("法定期限");
+
+deadline
+  .command("compute")
+  .description("按事件推算法定期限（DOMAIN-SPEC §9.1）")
+  .requiredOption("--procedure-id <id>")
+  .requiredOption("--event <event>", "JUDGMENT_SERVED|RULING_SERVED|COMPLAINT_SERVED|JUDGMENT_EFFECTIVE|PERFORMANCE_DUE|ARBITRATION_AWARD_RECEIVED")
+  .requiredOption("--event-date <date>", "事件日期 YYYY-MM-DD")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      applyDeadlineRules(buildDeps(), await resolveAuth(opts.token), {
+        procedureId: opts.procedureId,
+        event: opts.event,
+        eventDate: opts.eventDate,
+      }),
+    ),
+  );
+
+deadline
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => listMatterDeadlines(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })),
+  );
+
+deadline
+  .command("complete")
+  .requiredOption("--deadline-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
   );
 
 program.parseAsync(process.argv);
