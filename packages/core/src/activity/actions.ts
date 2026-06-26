@@ -149,11 +149,18 @@ export async function addHearing(deps: Deps, auth: AuthContext, rawInput: unknow
 
 export async function listMatterHearings(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
   await assertMatterEditable(deps.db, auth, rawInput.matterId);
-  // ENGAGED procedures only (§3.2).
+  // ENGAGED procedures only (§3.2). Bind the join on BOTH ids so a drifted row
+  // (hearing.matterId = A, procedure from matter B) can't leak across matters.
   return await deps.db
     .select(getTableColumns(hearings))
     .from(hearings)
-    .innerJoin(matterProcedures, eq(hearings.procedureId, matterProcedures.id))
+    .innerJoin(
+      matterProcedures,
+      and(
+        eq(hearings.procedureId, matterProcedures.id),
+        eq(matterProcedures.matterId, hearings.matterId),
+      ),
+    )
     .where(and(eq(hearings.matterId, rawInput.matterId), eq(matterProcedures.engagement, "ENGAGED")))
     .orderBy(asc(hearings.startsAt));
 }

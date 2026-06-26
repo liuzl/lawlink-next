@@ -292,7 +292,9 @@ export function MatterDetail() {
     try {
       await api.addHearing(hpProc, {
         title: hTitle,
-        startsAt: hStarts,
+        // Convert the offset-less datetime-local value to a real UTC instant
+        // based on the user's browser timezone (not the API host's).
+        startsAt: new Date(hStarts).toISOString(),
         room: hRoom || undefined,
         judge: hJudge || undefined,
       });
