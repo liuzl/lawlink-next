@@ -14,6 +14,9 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
+          # pnpm is enabled via corepack below, so skip the built-in
+          # package-manager cache (it would run before pnpm exists).
+          package-manager-cache: false
 
       - name: Enable pnpm (from package.json packageManager)
         run: corepack enable
