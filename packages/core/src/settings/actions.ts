@@ -42,19 +42,34 @@ export async function setSetting(deps: Deps, auth: AuthContext, rawInput: unknow
   requireRole(auth, "ADMIN");
   const input = SetSettingInput.parse(rawInput);
   if (input.value === undefined) throw new DomainError("VALIDATION", "设置值不能为空");
-  // Known-key validation: the firm legal rep must reference a real, active user,
-  // otherwise LEGAL_REP_SEAL approval would be impossible (no one could match).
-  // An empty value clears the setting.
-  if (input.key === "firmLegalRepUserId" && typeof input.value === "string" && input.value.length > 0) {
-    const [u] = await deps.db
-      .select({ id: users.id })
-      .from(users)
-      .where(and(eq(users.id, input.value), eq(users.active, true)))
-      .limit(1);
-    if (!u) throw new DomainError("VALIDATION", "法定代表人必须是有效的在职用户");
+
+  let value = input.value;
+  // Known-key validation: the firm legal rep must be a STRING that either clears
+  // (empty) or references a real, active user — otherwise LEGAL_REP_SEAL approval
+  // would be impossible. Reject non-string values (123/null/{}/[]) which would
+  // silently persist and read back as "unset".
+  if (input.key === "firmLegalRepUserId") {
+    if (typeof value !== "string") throw new DomainError("VALIDATION", "法定代表人必须为用户 ID 字符串");
+    const id = value.trim();
+    if (id.length > 0) {
+      const [u] = await deps.db
+        .select({ id: users.id })
+        .from(users)
+        .where(and(eq(users.id, id), eq(users.active, true)))
+        .limit(1);
+      if (!u) throw new DomainError("VALIDATION", "法定代表人必须是有效的在职用户");
+    }
+    value = id; // store the trimmed id (or "" to clear)
   }
+
   const now = deps.clock.now();
-  const valueJson = JSON.stringify(input.value);
+  const valueJson = JSON.stringify(value);
+  // Bound the serialized size (settings are small config, not blobs) so a
+  // mistaken/compromised ADMIN can't bloat the table or the settings response.
+  // TextEncoder is available on both Node and Workers.
+  if (new TextEncoder().encode(valueJson).length > 8192) {
+    throw new DomainError("VALIDATION", "设置值过大（上限 8KB）");
+  }
   await deps.db
     .insert(systemSettings)
     .values({ key: input.key, valueJson, updatedAt: now })
