@@ -1,0 +1,19 @@
+node_modules/
+dist/
+.turbo/
+*.log
+*.local
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# local sqlite databases
+*.db
+*.db-shm
+*.db-wal
+
+# build / deploy
+.wrangler/
+.vite/
+storage/

@@ -1,0 +1,21 @@
+{
+  "name": "@lawlink/cli",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "lawlink": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "dev": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@lawlink/core": "workspace:*",
+    "@lawlink/db": "workspace:*",
+    "commander": "^13.0.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.2"
+  }
+}

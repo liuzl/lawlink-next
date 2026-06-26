@@ -1,0 +1,20 @@
+# Cloudflare Workers config for the API (wired up in P5).
+name = "lawlink-next-api"
+main = "src/index.ts"
+compatibility_date = "2026-06-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 binding — fill database_id after `wrangler d1 create lawlink`.
+# [[d1_databases]]
+# binding = "DB"
+# database_name = "lawlink"
+# database_id = "TODO"
+
+# R2 binding for document storage (P5).
+# [[r2_buckets]]
+# binding = "STORAGE"
+# bucket_name = "lawlink-storage"
+
+# Cron Triggers for deadline / preservation reminders (P7).
+# [triggers]
+# crons = ["0 1 * * *"]
