@@ -55,6 +55,7 @@ import {
   setSetting,
   listSettings,
   listUsers,
+  listAssignableUsers,
   getReport,
   getSchedule,
   getFinanceOverview,
@@ -811,6 +812,13 @@ app.get("/api/reports", requireAuth, async (c) => {
 app.get("/api/users", requireAuth, async (c) => {
   try {
     return c.json(await listUsers(buildDeps(), c.get("auth"), { activeOnly: c.req.query("activeOnly") === "true" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/users/assignable", requireAuth, async (c) => {
+  try {
+    return c.json(await listAssignableUsers(buildDeps(), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }

@@ -671,7 +671,12 @@ export function MatterDetail() {
         </CardContent>
       </Card>
 
-      <TeamPanel matterId={matter.id} canManage={canEdit} onOwnerChanged={() => id && api.getMatter(id).then(setMatter)} />
+      <TeamPanel
+        matterId={matter.id}
+        currentOwnerId={matter.ownerId}
+        canManage={canEdit}
+        onOwnerChanged={() => id && api.getMatter(id).then(setMatter)}
+      />
 
       <Card>
         <CardHeader className="pb-3">

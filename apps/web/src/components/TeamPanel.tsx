@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { Users } from "lucide-react";
-import { api, type MatterMemberRow, type UserRow } from "@/lib/api";
+import { api, type MatterMemberRow } from "@/lib/api";
+
+type PickUser = { id: string; name: string; role: string };
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -26,15 +28,20 @@ const LAWYER_ROLES = new Set(["ADMIN", "PRINCIPAL_LAWYER", "LAWYER"]);
  * that replaces the whole team in one save. */
 export function TeamPanel({
   matterId,
+  currentOwnerId,
   canManage,
   onOwnerChanged,
 }: {
   matterId: string;
+  /** The matter's current ownerId — the fallback 主办 when no LEAD row exists yet
+   * (e.g. a legacy matter not in the roster), so the editor never silently picks
+   * an arbitrary lawyer as owner. */
+  currentOwnerId: string;
   canManage: boolean;
   onOwnerChanged?: () => void;
 }) {
   const [members, setMembers] = useState<MatterMemberRow[]>([]);
-  const [users, setUsers] = useState<UserRow[]>([]);
+  const [users, setUsers] = useState<PickUser[]>([]);
   const [editing, setEditing] = useState(false);
   const [ownerId, setOwnerId] = useState("");
   const [coLeads, setCoLeads] = useState<Set<string>>(new Set());
@@ -53,10 +60,12 @@ export function TeamPanel({
   async function startEdit() {
     setError(null);
     try {
-      const us = await api.listUsers(true);
+      const us = await api.listAssignableUsers();
       setUsers(us);
       const lead = members.find((m) => m.role === "LEAD");
-      setOwnerId(lead?.userId ?? us.find((u) => LAWYER_ROLES.has(u.role))?.id ?? "");
+      // Prefer the LEAD row, else the matter's actual ownerId — never an arbitrary
+      // first lawyer (which would silently transfer ownership on save).
+      setOwnerId(lead?.userId ?? currentOwnerId);
       setCoLeads(new Set(members.filter((m) => m.role === "CO_LEAD").map((m) => m.userId)));
       setAssistants(new Set(members.filter((m) => m.role === "ASSISTANT").map((m) => m.userId)));
       setEditing(true);

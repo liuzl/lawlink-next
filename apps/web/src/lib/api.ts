@@ -641,6 +641,7 @@ export const api = {
     return req<ReportData>(`/reports${qs ? `?${qs}` : ""}`);
   },
   listUsers: (activeOnly = false) => req<UserRow[]>(`/users${activeOnly ? "?activeOnly=true" : ""}`),
+  listAssignableUsers: () => req<{ id: string; name: string; role: string }[]>("/users/assignable"),
   listSettings: () => req<SettingRow[]>("/settings"),
   setSetting: (key: string, value: unknown) =>
     req<{ key: string }>("/settings", { method: "POST", body: JSON.stringify({ key, value }) }),
