@@ -111,12 +111,45 @@ export interface PreservationRow {
   daysToExpiry: number;
 }
 
+export interface DashCounts {
+  activeMatters: number;
+  pendingIntakes: number;
+  upcomingDeadlines: number;
+  expiringPreservations: number;
+}
+export interface DashDeadline {
+  id: string;
+  title: string;
+  category: string;
+  dueAt: string;
+  matterId: string;
+  internalCode: string;
+  matterTitle: string;
+}
+export interface DashPreservation {
+  id: string;
+  propertyType: string;
+  respondent: string | null;
+  expiryDate: string;
+  status: string;
+  matterId: string;
+  internalCode: string;
+  matterTitle: string;
+}
+export interface DashboardData {
+  counts: DashCounts;
+  upcomingDeadlines: DashDeadline[];
+  expiringPreservations: DashPreservation[];
+  horizonDays: number;
+}
+
 export const api = {
   login: (email: string, password: string) =>
     req<{ token: string; user: { role: string } }>("/auth/login", {
       method: "POST",
       body: JSON.stringify({ email, password }),
     }),
+  getDashboard: () => req<DashboardData>("/dashboard"),
   listIntakes: () => req<IntakeRow[]>("/intakes"),
   createIntake: (body: Record<string, unknown>) =>
     req<IntakeRow>("/intakes", { method: "POST", body: JSON.stringify(body) }),

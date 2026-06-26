@@ -17,6 +17,7 @@ import {
   createIntake,
   createPreservation,
   declineIntake,
+  getDashboard,
   getMatter,
   hashPassword,
   listMatterDeadlines,
@@ -213,6 +214,12 @@ program
       }),
     ),
   );
+
+program
+  .command("dashboard")
+  .description("工作台聚合（近期到期等）")
+  .option("--token <token>", "登录态")
+  .action((opts) => run(async () => getDashboard(buildDeps(), await resolveAuth(opts.token))));
 
 // ── matter ──────────────────────────────────────────────────────────────────
 const matter = program.command("matter").description("案件 / 程序");

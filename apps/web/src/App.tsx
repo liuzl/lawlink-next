@@ -2,6 +2,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { getToken } from "@/lib/api";
 import { AppShell } from "@/components/layout/app-shell";
 import { Login } from "@/pages/Login";
+import { Dashboard } from "@/pages/Dashboard";
 import { Intakes } from "@/pages/Intakes";
 import { Conflicts } from "@/pages/Conflicts";
 import { Matters } from "@/pages/Matters";
@@ -17,7 +18,8 @@ export function App() {
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route element={<RequireAuth />}>
-        <Route path="/" element={<Intakes />} />
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/intakes" element={<Intakes />} />
         <Route path="/conflicts" element={<Conflicts />} />
         <Route path="/matters" element={<Matters />} />
         <Route path="/matters/:id" element={<MatterDetail />} />

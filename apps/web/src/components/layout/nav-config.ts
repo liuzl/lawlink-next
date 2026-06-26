@@ -1,5 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
+  LayoutDashboard,
   ClipboardCheck,
   ShieldAlert,
   FolderOpen,
@@ -20,7 +21,8 @@ export type NavItem = {
 
 // 仅「收案」与「利益冲突」可导航；其余复刻旧版外观但置灰待开放
 export const primaryNav: NavItem[] = [
-  { label: "收案", href: "/", icon: ClipboardCheck },
+  { label: "工作台", href: "/", icon: LayoutDashboard },
+  { label: "收案", href: "/intakes", icon: ClipboardCheck },
   { label: "利益冲突", href: "/conflicts", icon: ShieldAlert },
   { label: "案件", href: "/matters", icon: FolderOpen },
   { label: "客户", href: "/clients", icon: Users, disabled: true },

@@ -17,6 +17,7 @@ import {
   createIntake,
   createPreservation,
   declineIntake,
+  getDashboard,
   getMatter,
   liftPreservation,
   listIntakes,
@@ -70,6 +71,14 @@ const app = new Hono<Env>();
 app.use("/api/*", cors({ origin: (process.env.LAWLINK_CORS_ORIGIN ?? "*") }));
 
 app.get("/api/health", (c) => c.json({ name: "lawlink-next", status: "ok" }));
+
+app.get("/api/dashboard", requireAuth, async (c) => {
+  try {
+    return c.json(await getDashboard(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 app.post("/api/auth/login", async (c) => {
   try {
