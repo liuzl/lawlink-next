@@ -8,6 +8,13 @@
       "when": 1782448853803,
       "tag": "0000_amusing_swordsman",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "6",
+      "when": 1782450165627,
+      "tag": "0001_magical_killraven",
+      "breakpoints": true
     }
   ]
 }

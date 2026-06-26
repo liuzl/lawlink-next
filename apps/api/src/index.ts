@@ -9,10 +9,12 @@ import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
 import type { Context, Next } from "hono";
 import {
+  convertIntake,
   createIntake,
   declineIntake,
   login,
   requireJwtSecret,
+  runConflictCheck,
   verifyToken,
   DomainError,
   type AuthContext,
@@ -91,6 +93,25 @@ app.post("/api/intakes/:id/decline", requireAuth, async (c) => {
         reason: body.reason,
       }),
     );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
+  try {
+    return c.json(
+      await convertIntake(buildDeps(), c.get("auth"), { intakeId: c.req.param("id") }),
+      201,
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/conflicts/check", requireAuth, async (c) => {
+  try {
+    return c.json(await runConflictCheck(buildDeps(), c.get("auth"), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }

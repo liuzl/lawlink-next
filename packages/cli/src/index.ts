@@ -10,11 +10,13 @@
 import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
+  convertIntake,
   createIntake,
   declineIntake,
   hashPassword,
   login,
   requireJwtSecret,
+  runConflictCheck,
   verifyToken,
   type AuthContext,
   type Deps,
@@ -130,6 +132,9 @@ intake
   .command("create")
   .requiredOption("--client-name <name>", "委托方名称")
   .requiredOption("--category <category>", "案件类别")
+  .option("--client-id-number <id>", "委托方证件号")
+  .option("--opposing-name <name>", "对方名称")
+  .option("--opposing-id-number <id>", "对方证件号")
   .option("--title <title>", "标题（留空自动生成）")
   .option("--claim-amount <amount>", "标的额（最多两位小数）")
   .option("--token <token>", "登录态（缺省用 env stub）")
@@ -141,6 +146,9 @@ intake
           title: opts.title,
           category: opts.category,
           clientName: opts.clientName,
+          clientIdNumber: opts.clientIdNumber,
+          opposingName: opts.opposingName,
+          opposingIdNumber: opts.opposingIdNumber,
           claimAmount: opts.claimAmount,
         }),
       opts.format,
@@ -158,6 +166,38 @@ intake
       declineIntake(buildDeps(), await resolveAuth(opts.token), {
         intakeId: opts.intakeId,
         reason: opts.reason,
+      }),
+    ),
+  );
+
+intake
+  .command("convert")
+  .description("转为正式案件（仅 ADMIN / PRINCIPAL_LAWYER）")
+  .requiredOption("--intake-id <id>")
+  .requiredOption("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      convertIntake(buildDeps(), await resolveAuth(opts.token), {
+        intakeId: opts.intakeId,
+      }),
+    ),
+  );
+
+// ── conflict ────────────────────────────────────────────────────────────────
+program
+  .command("conflict")
+  .description("利益冲突检索")
+  .command("check")
+  .option("--name <name>", "当事人名称")
+  .option("--id-number <id>", "证件号")
+  .option("--candidate-role <role>", "本次角色 CLIENT_PARTY|OPPOSING_PARTY|THIRD_PARTY", "OPPOSING_PARTY")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      runConflictCheck(buildDeps(), await resolveAuth(opts.token), {
+        name: opts.name,
+        idNumber: opts.idNumber,
+        candidateRole: opts.candidateRole,
       }),
     ),
   );

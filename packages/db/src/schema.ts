@@ -9,7 +9,7 @@
  * This is a P0 slice (User + Intake) proving the pattern. The full schema is
  * ported per docs/SQLITE_D1_MIGRATION.md in P2.
  */
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, index } from "drizzle-orm/sqlite-core";
 
 export const users = sqliteTable("User", {
   id: text("id").primaryKey(),
@@ -31,4 +31,57 @@ export const intakes = sqliteTable("Intake", {
   declinedReason: text("declined_reason"),
   createdById: text("created_by_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+export const matters = sqliteTable(
+  "Matter",
+  {
+    id: text("id").primaryKey(),
+    internalCode: text("internal_code").notNull().unique(),
+    title: text("title").notNull(),
+    category: text("category").notNull(),
+    status: text("status").notNull().default("PENDING_ACCEPTANCE"),
+    claimAmount: text("claim_amount"),
+    primaryClientName: text("primary_client_name"),
+    ourStanding: text("our_standing"),
+    ownerId: text("owner_id").notNull(),
+    intakeId: text("intake_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Matter_status_idx").on(t.status)],
+);
+
+/** Parties of an intake or matter — the conflict-check search corpus. */
+export const parties = sqliteTable(
+  "Party",
+  {
+    id: text("id").primaryKey(),
+    intakeId: text("intake_id"),
+    matterId: text("matter_id"),
+    // CLIENT_PARTY | OPPOSING_PARTY | THIRD_PARTY
+    role: text("role").notNull(),
+    name: text("name").notNull(),
+    idNumber: text("id_number"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Party_name_idx").on(t.name), index("Party_idnum_idx").on(t.idNumber)],
+);
+
+/** Audit record of a conflict check (one row per run; hits returned in-memory). */
+export const conflictChecks = sqliteTable("ConflictCheck", {
+  id: text("id").primaryKey(),
+  intakeId: text("intake_id"),
+  queryName: text("query_name"),
+  queryIdNumber: text("query_id_number"),
+  candidateRole: text("candidate_role").notNull(),
+  topSeverity: text("top_severity").notNull(),
+  hitCount: integer("hit_count").notNull(),
+  checkedById: text("checked_by_id").notNull(),
+  createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+});
+
+/** Atomic named counters (internalCode sequences, etc.). */
+export const counters = sqliteTable("Counter", {
+  key: text("key").primaryKey(),
+  value: integer("value").notNull().default(0),
 });

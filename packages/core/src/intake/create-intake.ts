@@ -1,13 +1,12 @@
 /**
- * Use case: register an intake (收案登记).
+ * Use case: register an intake (收案登记) — DOMAIN-SPEC §5.1.
  *
- * Reference implementation that establishes the core-layer pattern for the
- * whole rewrite. Business rules per DOMAIN-SPEC §5.1. This is a P0 skeleton —
- * conflict-check linkage, party/contract handling, and the real auto-title
- * rule arrive in P1+.
+ * Stores the intake plus its parties (client + optional opposing party) in one
+ * transaction. Parties feed the conflict-check corpus and are carried over to
+ * the Matter on conversion.
  */
 import { z } from "zod";
-import { intakes } from "@lawlink/db";
+import { intakes, parties } from "@lawlink/db";
 import type { AuthContext, Deps, IntakeStatus } from "../types.js";
 
 export const CreateIntakeInput = z.object({
@@ -22,6 +21,9 @@ export const CreateIntakeInput = z.object({
     "SPECIAL_PROJECT",
   ]),
   clientName: z.string().min(1).max(200),
+  clientIdNumber: z.string().min(1).max(64).optional(),
+  opposingName: z.string().min(1).max(200).optional(),
+  opposingIdNumber: z.string().min(1).max(64).optional(),
   /** Decimal stored as string end-to-end (DOMAIN-SPEC §8; SQLite has no decimal). */
   claimAmount: z
     .string()
@@ -49,19 +51,51 @@ export async function createIntake(
   rawInput: unknown,
 ): Promise<Intake> {
   const input = CreateIntakeInput.parse(rawInput);
+  const now = deps.clock.now();
 
-  const row: Intake = {
+  const intake: Intake = {
     id: deps.ids.newId(),
-    // Placeholder auto-title — real rule: `{委托方} 与 {对方} {案由}纠纷` (DOMAIN-SPEC §5.1).
-    title: input.title ?? `${input.clientName} 收案`,
+    // Placeholder auto-title; real rule `{委托方} 与 {对方} {案由}纠纷` (DOMAIN-SPEC §5.1).
+    title:
+      input.title ??
+      (input.opposingName
+        ? `${input.clientName} 与 ${input.opposingName}`
+        : `${input.clientName} 收案`),
     category: input.category,
     status: "INTAKE",
     claimAmount: input.claimAmount ?? null,
     clientName: input.clientName,
     createdById: auth.userId,
-    createdAt: deps.clock.now(),
+    createdAt: now,
   };
 
-  await deps.db.insert(intakes).values(row);
-  return row;
+  const partyRows = [
+    {
+      id: deps.ids.newId(),
+      intakeId: intake.id,
+      matterId: null,
+      role: "CLIENT_PARTY",
+      name: input.clientName,
+      idNumber: input.clientIdNumber ?? null,
+      createdAt: now,
+    },
+  ];
+  if (input.opposingName) {
+    partyRows.push({
+      id: deps.ids.newId(),
+      intakeId: intake.id,
+      matterId: null,
+      role: "OPPOSING_PARTY",
+      name: input.opposingName,
+      idNumber: input.opposingIdNumber ?? null,
+      createdAt: now,
+    });
+  }
+
+  await deps.db.transaction(async (tx) => {
+    await tx.insert(intakes).values(intake);
+    await tx.insert(parties).values(partyRows);
+  });
+
+  return intake;
 }
