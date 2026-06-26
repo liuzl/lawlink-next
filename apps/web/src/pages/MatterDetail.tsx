@@ -1,11 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { CalendarClock, Check, ChevronLeft } from "lucide-react";
+import { CalendarClock, Check, ChevronLeft, Snowflake } from "lucide-react";
 import {
   api,
   getRole,
   type DeadlineRow,
   type MatterDetail as MatterDetailData,
+  type PreservationRow,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -65,6 +66,29 @@ const DL_CAT_CN: Record<string, string> = {
 /** Whole-calendar-day diff (local time): 0 = due today, <0 = overdue (the first
  * calendar day after the due date), >0 = days remaining. Avoids the timezone /
  * fractional-instant bugs of comparing raw millisecond timestamps. */
+const PRES_TYPE_CN: Record<string, string> = {
+  PRE_LITIGATION: "诉前",
+  IN_LITIGATION: "诉中",
+  ENFORCEMENT: "执行",
+};
+const PROP_TYPE: { value: string; label: string }[] = [
+  { value: "BANK_DEPOSIT", label: "银行存款" },
+  { value: "REAL_ESTATE", label: "房产" },
+  { value: "VEHICLE", label: "车辆" },
+  { value: "EQUITY", label: "股权" },
+  { value: "IP", label: "知识产权" },
+  { value: "OTHER", label: "其他" },
+];
+const PROP_TYPE_CN: Record<string, string> = Object.fromEntries(
+  PROP_TYPE.map((p) => [p.value, p.label]),
+);
+const PRES_STATUS_CN: Record<string, string> = {
+  ACTIVE: "生效",
+  RENEWED: "已续保",
+  EXPIRED: "已到期",
+  LIFTED: "已解除",
+};
+
 function dueDays(dueAt: string): number {
   const [y, m, d] = dueAt.slice(0, 10).split("-").map(Number);
   const due = new Date(y, (m ?? 1) - 1, d ?? 1);
@@ -77,8 +101,16 @@ export function MatterDetail() {
   const { id = "" } = useParams();
   const [matter, setMatter] = useState<MatterDetailData | null>(null);
   const [deadlines, setDeadlines] = useState<DeadlineRow[]>([]);
+  const [preservations, setPreservations] = useState<PreservationRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [dlError, setDlError] = useState<string | null>(null);
+  const [presType, setPresType] = useState("");
+  const [presProp, setPresProp] = useState("");
+  const [presStart, setPresStart] = useState("");
+  const [presAmount, setPresAmount] = useState("");
+  const [presRespondent, setPresRespondent] = useState("");
+  const [renewId, setRenewId] = useState<string | null>(null);
+  const [renewDate, setRenewDate] = useState("");
   const [type, setType] = useState("");
   const [caseNumber, setCaseNumber] = useState("");
   const [dlProc, setDlProc] = useState("");
@@ -114,6 +146,14 @@ export function MatterDetail() {
       .catch((err) => {
         if (active) setDlError(err instanceof Error ? err.message : String(err));
       });
+    api
+      .listPreservations(id)
+      .then((p) => {
+        if (active) setPreservations(p);
+      })
+      .catch(() => {
+        /* preservation card degrades silently; matter view unaffected */
+      });
     return () => {
       active = false;
     };
@@ -131,6 +171,50 @@ export function MatterDetail() {
       setDlError(null);
     } catch (err) {
       setDlError(err instanceof Error ? err.message : String(err));
+    }
+    try {
+      setPreservations(await api.listPreservations(id));
+    } catch {
+      /* ignore */
+    }
+  }
+
+  async function createPres(e: FormEvent) {
+    e.preventDefault();
+    if (!presType || !presProp || !presStart) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createPreservation(id, {
+        type: presType,
+        propertyType: presProp,
+        startDate: presStart,
+        amount: presAmount || undefined,
+        respondent: presRespondent || undefined,
+      });
+      setPresType("");
+      setPresProp("");
+      setPresStart("");
+      setPresAmount("");
+      setPresRespondent("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doRenew(pid: string) {
+    if (!renewDate) return;
+    setError(null);
+    try {
+      await api.renewPreservation(pid, renewDate);
+      setRenewId(null);
+      setRenewDate("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -372,6 +456,114 @@ export function MatterDetail() {
               </Button>
             </form>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Snowflake className="h-4 w-4 text-status-blue" strokeWidth={1.8} />
+            财产保全
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {preservations.map((p) => {
+            const active = p.status === "ACTIVE" || p.status === "RENEWED";
+            const overdue = active && p.daysToExpiry < 0;
+            const soon = active && p.daysToExpiry >= 0 && p.daysToExpiry <= 30;
+            return (
+              <div key={p.id} className="rounded-sm border border-border px-3 py-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="ll-chip tabular">{PRES_TYPE_CN[p.type] ?? p.type}</span>
+                      <span className="text-sm font-medium">{PROP_TYPE_CN[p.propertyType] ?? p.propertyType}</span>
+                      {p.respondent && <span className="text-xs text-muted-foreground">{p.respondent}</span>}
+                      <Badge variant="secondary" className="text-[10px]">{PRES_STATUS_CN[p.status] ?? p.status}</Badge>
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      到期 {p.expiryDate.slice(0, 10)}
+                      {active && (
+                        <span className={overdue ? "ml-2 text-destructive" : soon ? "ml-2 text-status-orange" : "ml-2"}>
+                          {overdue ? `已逾期 ${-p.daysToExpiry} 天` : `剩 ${p.daysToExpiry} 天`}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  {canEdit && active && p.daysToExpiry >= 0 && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        setRenewId(renewId === p.id ? null : p.id);
+                        setRenewDate("");
+                      }}
+                    >
+                      续保
+                    </Button>
+                  )}
+                </div>
+                {renewId === p.id && (
+                  <div className="mt-2 flex items-end gap-2">
+                    <Input type="date" value={renewDate} onChange={(e) => setRenewDate(e.target.value)} className="w-40" />
+                    <Button size="sm" disabled={!renewDate} onClick={() => doRenew(p.id)}>
+                      确认续保
+                    </Button>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+          {preservations.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无保全</p>}
+
+          {canEdit && (
+            <form onSubmit={createPres} className="flex flex-wrap items-end gap-3 pt-2">
+              <div className="space-y-1.5">
+                <Label>保全类型</Label>
+                <Select value={presType} onValueChange={setPresType}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue placeholder="选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(PRES_TYPE_CN).map(([v, l]) => (
+                      <SelectItem key={v} value={v}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>财产类型</Label>
+                <Select value={presProp} onValueChange={setPresProp}>
+                  <SelectTrigger className="w-32">
+                    <SelectValue placeholder="选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {PROP_TYPE.map((p) => (
+                      <SelectItem key={p.value} value={p.value}>
+                        {p.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>生效日</Label>
+                <Input type="date" value={presStart} onChange={(e) => setPresStart(e.target.value)} className="w-36" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>被保全人（可选）</Label>
+                <Input value={presRespondent} onChange={(e) => setPresRespondent(e.target.value)} className="w-36" />
+              </div>
+              <Button type="submit" disabled={busy || !presType || !presProp || !presStart}>
+                {busy ? "添加中…" : "新增保全"}
+              </Button>
+            </form>
+          )}
+          <p className="pt-1 text-[11px] text-muted-foreground">
+            到期期限按财产类型自动推算（存款 1 年 / 动产 2 年 / 不动产·股权·知识产权 3 年），可手工覆盖。
+          </p>
         </CardContent>
       </Card>
     </div>

@@ -98,6 +98,18 @@ export interface DeadlineRow {
   autoComputed: boolean;
   completed: boolean;
 }
+export interface PreservationRow {
+  id: string;
+  type: string;
+  propertyType: string;
+  amount: string | null;
+  respondent: string | null;
+  startDate: string;
+  durationDays: number;
+  expiryDate: string;
+  status: string;
+  daysToExpiry: number;
+}
 
 export const api = {
   login: (email: string, password: string) =>
@@ -132,4 +144,15 @@ export const api = {
     }),
   completeDeadline: (id: string) =>
     req<{ completed: boolean }>(`/deadlines/${id}/complete`, { method: "POST" }),
+  listPreservations: (matterId: string) => req<PreservationRow[]>(`/matters/${matterId}/preservations`),
+  createPreservation: (matterId: string, body: Record<string, unknown>) =>
+    req<{ expiryDate: string }>(`/matters/${matterId}/preservations`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  renewPreservation: (id: string, newExpiryDate: string) =>
+    req<{ status: string }>(`/preservations/${id}/renew`, {
+      method: "POST",
+      body: JSON.stringify({ newExpiryDate }),
+    }),
 };
