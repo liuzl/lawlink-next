@@ -58,6 +58,37 @@ export interface ConflictResult {
   hits: ConflictHit[];
 }
 
+export interface MatterRow {
+  id: string;
+  internalCode: string;
+  title: string;
+  category: string;
+  status: string;
+  claimAmount: string | null;
+  primaryClientName: string | null;
+  ownerId: string;
+  createdAt: string;
+}
+export interface ProcedureRow {
+  id: string;
+  type: string;
+  engagement: string;
+  order: number;
+  caseNumber: string | null;
+  handlingAgency: string | null;
+  status: string;
+}
+export interface MatterPartyRow {
+  id: string;
+  role: string;
+  name: string;
+  idNumber: string | null;
+}
+export interface MatterDetail extends MatterRow {
+  procedures: ProcedureRow[];
+  parties: MatterPartyRow[];
+}
+
 export const api = {
   login: (email: string, password: string) =>
     req<{ token: string; user: { role: string } }>("/auth/login", {
@@ -76,4 +107,11 @@ export const api = {
     }),
   conflictCheck: (body: Record<string, unknown>) =>
     req<ConflictResult>("/conflicts/check", { method: "POST", body: JSON.stringify(body) }),
+  listMatters: () => req<MatterRow[]>("/matters"),
+  getMatter: (id: string) => req<MatterDetail>(`/matters/${id}`),
+  addProcedure: (id: string, body: Record<string, unknown>) =>
+    req<ProcedureRow>(`/matters/${id}/procedures`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

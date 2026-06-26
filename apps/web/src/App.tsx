@@ -4,6 +4,8 @@ import { AppShell } from "@/components/layout/app-shell";
 import { Login } from "@/pages/Login";
 import { Intakes } from "@/pages/Intakes";
 import { Conflicts } from "@/pages/Conflicts";
+import { Matters } from "@/pages/Matters";
+import { MatterDetail } from "@/pages/MatterDetail";
 
 /** 认证门卫：无 token 跳登录，否则渲染外壳布局 */
 function RequireAuth() {
@@ -17,6 +19,8 @@ export function App() {
       <Route element={<RequireAuth />}>
         <Route path="/" element={<Intakes />} />
         <Route path="/conflicts" element={<Conflicts />} />
+        <Route path="/matters" element={<Matters />} />
+        <Route path="/matters/:id" element={<MatterDetail />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
