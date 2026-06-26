@@ -12,6 +12,7 @@ import {
   createIntake,
   declineIntake,
   login,
+  requireJwtSecret,
   verifyToken,
   DomainError,
   type AuthContext,
@@ -19,16 +20,18 @@ import {
 } from "@lawlink/core";
 import { createDb } from "@lawlink/db";
 
-function jwtSecret(): string {
-  return process.env.LAWLINK_JWT_SECRET ?? "dev-secret-change-me";
+/** Real JWT secret — throws if unset/placeholder (no forgeable fallback). */
+function getSecret(): string {
+  return requireJwtSecret(process.env.LAWLINK_JWT_SECRET);
 }
 
-function buildDeps(): Deps {
+/** `secret` is only needed by token-issuing routes (login). */
+function buildDeps(secret = ""): Deps {
   return {
     db: createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db"),
     ids: { newId: () => randomUUID() },
     clock: { now: () => new Date() },
-    secrets: { jwt: jwtSecret() },
+    secrets: { jwt: secret },
   };
 }
 
@@ -42,7 +45,8 @@ const STATUS: Record<DomainError["code"], 400 | 403 | 404 | 409> = {
 
 function fail(c: Context, err: unknown) {
   if (err instanceof DomainError) return c.json({ error: err.message }, STATUS[err.code]);
-  return c.json({ error: err instanceof Error ? err.message : String(err) }, 400);
+  // Non-domain errors (e.g. missing JWT secret config) are server-side faults.
+  return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 }
 
 type Env = { Variables: { auth: AuthContext } };
@@ -52,7 +56,7 @@ app.get("/api/health", (c) => c.json({ name: "lawlink-next", status: "ok" }));
 
 app.post("/api/auth/login", async (c) => {
   try {
-    return c.json(await login(buildDeps(), await c.req.json()));
+    return c.json(await login(buildDeps(getSecret()), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -63,7 +67,7 @@ async function requireAuth(c: Context<Env>, next: Next) {
   const header = c.req.header("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   try {
-    c.set("auth", await verifyToken(jwtSecret(), token));
+    c.set("auth", await verifyToken(getSecret(), token));
   } catch (err) {
     return fail(c, err);
   }

@@ -14,6 +14,7 @@ import {
   declineIntake,
   hashPassword,
   login,
+  requireJwtSecret,
   verifyToken,
   type AuthContext,
   type Deps,
@@ -21,23 +22,25 @@ import {
 } from "@lawlink/core";
 import { createDb, runMigrations, users } from "@lawlink/db";
 
-function jwtSecret(): string {
-  return process.env.LAWLINK_JWT_SECRET ?? "dev-secret-change-me";
+/** Resolve the real JWT secret — throws if unset/placeholder (no fallback). */
+function getSecret(): string {
+  return requireJwtSecret(process.env.LAWLINK_JWT_SECRET);
 }
 
-function buildDeps(): Deps {
+/** Deps. `secret` is only needed by token-issuing use cases (login). */
+function buildDeps(secret = ""): Deps {
   const url = process.env.LAWLINK_DB_URL ?? "file:./lawlink.db";
   return {
     db: createDb(url),
     ids: { newId: () => randomUUID() },
     clock: { now: () => new Date() },
-    secrets: { jwt: jwtSecret() },
+    secrets: { jwt: secret },
   };
 }
 
 /** Resolve the caller: a verified token if given, else an env stub (dev only). */
 async function resolveAuth(token?: string): Promise<AuthContext> {
-  if (token) return verifyToken(jwtSecret(), token);
+  if (token) return verifyToken(getSecret(), token);
   return {
     userId: process.env.LAWLINK_USER_ID ?? "cli-user",
     role: (process.env.LAWLINK_ROLE as Role) ?? "LAWYER",
@@ -49,9 +52,12 @@ function emit(format: string, data: unknown): void {
   else process.stdout.write(JSON.stringify(data, null, 2) + "\n");
 }
 
-/** Run an action, printing JSON errors and setting a non-zero exit code. */
+/** Run an action, printing JSON errors and setting a non-zero exit code.
+ * `Promise.resolve().then(fn)` also captures synchronous throws (e.g. a
+ * missing JWT secret evaluated while building deps). */
 function run(fn: () => Promise<unknown>, format = "json"): void {
-  fn()
+  Promise.resolve()
+    .then(fn)
     .then((data) => emit(format, data))
     .catch((err) => {
       emit("json", { error: err instanceof Error ? err.message : String(err) });
@@ -110,7 +116,7 @@ auth
   .command("login")
   .requiredOption("--email <email>")
   .requiredOption("--password <password>")
-  .action((opts) => run(() => login(buildDeps(), opts)));
+  .action((opts) => run(() => login(buildDeps(getSecret()), opts)));
 
 auth
   .command("whoami")
