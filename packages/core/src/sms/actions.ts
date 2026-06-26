@@ -236,13 +236,16 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   // validation above ran first, so a failed validation never wrongly marks it
   // processed. (If addHearing below fails, the SMS is processed with no hearing —
   // recoverable via markSmsProcessed undo; still no duplicate.)
+  // Claim requires BOTH processed=false AND no hearing yet, so manually
+  // un-processing a generated SMS (markSmsProcessed undo leaves generatedHearingId
+  // set) can't reopen it for a duplicate hearing.
   const now = deps.clock.now();
   const claimed = await deps.db
     .update(smsMessages)
     .set({ processed: true, processedAt: now, updatedAt: now })
-    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false)))
+    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedHearingId)))
     .returning({ id: smsMessages.id });
-  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
+  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成开庭，无法重复生成");
 
   // addHearing enforces matter write access + audits; we just thread the data.
   // If it throws (e.g. the matter was archived in the race window AFTER our
@@ -306,14 +309,15 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
   await assertGeneratableProcedure(deps, auth, procedureId); // all addDeadline preconditions, pre-claim
 
-  // Atomic claim before creating — same idempotency guard as gen-hearing.
+  // Atomic claim before creating — requires processed=false AND no deadline yet,
+  // so un-processing a generated SMS can't reopen it for a duplicate deadline.
   const now = deps.clock.now();
   const claimed = await deps.db
     .update(smsMessages)
     .set({ processed: true, processedAt: now, updatedAt: now })
-    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false)))
+    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedDeadlineId)))
     .returning({ id: smsMessages.id });
-  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
+  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成期限，无法重复生成");
 
   // Roll the claim back if creation throws in the race window — same retryable
   // guard as gen-hearing (only while no generated id was written).
