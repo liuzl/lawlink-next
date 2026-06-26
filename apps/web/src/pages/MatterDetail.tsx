@@ -50,16 +50,33 @@ export function MatterDetail() {
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
 
-  async function load() {
+  // Load on id change with a cancellation guard so a slower response from a
+  // previous matter can't overwrite the current route; clear stale state first.
+  useEffect(() => {
+    let active = true;
+    setMatter(null);
+    setError(null);
+    api
+      .getMatter(id)
+      .then((m) => {
+        if (active) setMatter(m);
+      })
+      .catch((err) => {
+        if (active) setError(err instanceof Error ? err.message : String(err));
+      });
+    return () => {
+      active = false;
+    };
+  }, [id]);
+
+  async function refresh() {
     try {
       setMatter(await api.getMatter(id));
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
-  useEffect(() => {
-    void load();
-  }, [id]);
 
   const allowedTypes = matter ? (PROCS_BY_CAT[matter.category] ?? []) : [];
 
@@ -72,7 +89,7 @@ export function MatterDetail() {
       await api.addProcedure(id, { type, caseNumber: caseNumber || undefined });
       setType("");
       setCaseNumber("");
-      await load();
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

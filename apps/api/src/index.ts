@@ -143,7 +143,7 @@ app.get("/api/matters", requireAuth, async (c) => {
 
 app.get("/api/matters/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getMatter(buildDeps(), c.get("auth"), { matterId: c.req.param("id") }));
+    return c.json(await getMatter(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
