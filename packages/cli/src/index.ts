@@ -91,10 +91,15 @@ import {
   requireJwtSecret,
   runConflictCheck,
   verifyToken,
+  uploadDocument,
+  getDocumentForDownload,
+  createFsStorage,
   type AuthContext,
   type Deps,
   type Role,
 } from "@lawlink/core";
+import { readFile, writeFile } from "node:fs/promises";
+import { basename } from "node:path";
 import { createDb, runMigrations, users } from "@lawlink/db";
 
 /** Resolve the real JWT secret — throws if unset/placeholder (no fallback). */
@@ -108,7 +113,8 @@ function buildDeps(secret = ""): Deps {
   const db = createDb(url);
   const ids = { newId: () => randomUUID() };
   const clock = { now: () => new Date() };
-  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock) };
+  const storage = createFsStorage(process.env.LAWLINK_STORAGE_DIR ?? "./storage");
+  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock), storage };
 }
 
 /** Resolve the caller: a verified token if given, else an env stub (dev only). */
@@ -647,6 +653,38 @@ folder
 
 // ── document (材料/文书) ───────────────────────────────────────────────────────
 const document = program.command("document").description("材料 / 文书");
+document
+  .command("upload")
+  .description("上传真实文件并登记材料")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--file <path>", "本地文件路径")
+  .option("--name <name>", "材料名（缺省取文件名）")
+  .option("--category <c>", "EVIDENCE|PLEADING|PROCEDURE|JUDGMENT|CONTRACT|OTHER", "OTHER")
+  .option("--folder-id <id>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      const bytes = new Uint8Array(await readFile(opts.file));
+      return uploadDocument(
+        buildDeps(),
+        await resolveAuth(opts.token),
+        { matterId: opts.matterId, name: opts.name ?? basename(opts.file), category: opts.category, folderId: opts.folderId },
+        bytes,
+      );
+    }),
+  );
+document
+  .command("download")
+  .requiredOption("--id <id>")
+  .requiredOption("--out <path>", "保存到本地路径")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      const { name, bytes } = await getDocumentForDownload(buildDeps(), await resolveAuth(opts.token), { documentId: opts.id });
+      await writeFile(opts.out, bytes);
+      return { saved: opts.out, name, size: bytes.length };
+    }),
+  );
 document
   .command("register")
   .requiredOption("--matter-id <id>")

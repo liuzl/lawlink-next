@@ -490,6 +490,22 @@ export function MatterDetail() {
     }
   }
 
+  async function uploadDocFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-selecting the same file
+    if (!file) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.uploadDocument(id, file, { category: docCategory, folderId: docFolderId || undefined });
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   /** Run a document lifecycle action then refresh; surface its error inline. */
   async function docAction(fn: () => Promise<unknown>) {
     setError(null);
@@ -1111,6 +1127,12 @@ export function MatterDetail() {
                         <Badge variant="secondary" className="text-[10px]">{DOC_CAT_CN[d.category] ?? d.category}</Badge>
                         <Badge variant="outline" className="text-[10px]">{DOC_STATUS_CN[d.status] ?? d.status}</Badge>
                       </div>
+                      <div className="flex items-center gap-1">
+                        {d.size != null && (
+                          <Button variant="ghost" size="sm" onClick={() => docAction(() => api.downloadDocument(d.id, d.name))}>
+                            下载
+                          </Button>
+                        )}
                       {canModifyMatter && (
                         <div className="flex items-center gap-1">
                           {d.status === "DRAFT" && (
@@ -1154,6 +1176,7 @@ export function MatterDetail() {
                           </Button>
                         </div>
                       )}
+                      </div>
                     </div>
                   ))}
                   {docs.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">（空）</p>}
@@ -1206,6 +1229,18 @@ export function MatterDetail() {
                   {busy ? "登记中…" : "登记材料"}
                 </Button>
               </form>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label>上传文件</Label>
+                  <input
+                    type="file"
+                    onChange={uploadDocFile}
+                    disabled={busy}
+                    className="block w-72 text-xs file:mr-2 file:rounded-sm file:border file:border-input file:bg-background file:px-2 file:py-1 file:text-xs"
+                  />
+                </div>
+                <span className="pb-1.5 text-[11px] text-muted-foreground">按上方所选分类 / 卷宗归档</span>
+              </div>
               <form onSubmit={addFolder} className="flex flex-wrap items-end gap-3">
                 <div className="space-y-1.5">
                   <Label>新建卷宗</Label>

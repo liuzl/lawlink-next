@@ -93,6 +93,9 @@ import {
   requireJwtSecret,
   runConflictCheck,
   verifyToken,
+  uploadDocument,
+  getDocumentForDownload,
+  createFsStorage,
   DomainError,
   type AuthContext,
   type Deps,
@@ -110,7 +113,8 @@ function buildDeps(secret = "", ctx?: { ip?: string; userAgent?: string }): Deps
   const db = createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db");
   const ids = { newId: () => randomUUID() };
   const clock = { now: () => new Date() };
-  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock, ctx) };
+  const storage = createFsStorage(process.env.LAWLINK_STORAGE_DIR ?? "./storage");
+  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock, ctx), storage };
 }
 
 /** Audit context (ip / user-agent) from a request. */
@@ -512,6 +516,40 @@ app.post("/api/matters/:id/documents", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(await registerDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+// Real-file upload (multipart/form-data: file + name/category/folderId fields).
+app.post("/api/matters/:id/documents/upload", requireAuth, async (c) => {
+  try {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) throw new DomainError("VALIDATION", "缺少上传文件");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const meta = {
+      matterId: c.req.param("id"),
+      name: (form.get("name") as string) || file.name,
+      category: (form.get("category") as string) || undefined,
+      folderId: (form.get("folderId") as string) || undefined,
+      sourceParty: (form.get("sourceParty") as string) || undefined,
+      mimeType: file.type || undefined,
+    };
+    return c.json(await uploadDocument(buildDeps("", auditCtx(c)), c.get("auth"), meta, bytes), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+// Authenticated download (streams the stored bytes).
+app.get("/api/documents/:id/download", requireAuth, async (c) => {
+  try {
+    const { name, mimeType, bytes } = await getDocumentForDownload(buildDeps(), c.get("auth"), { documentId: c.req.param("id") ?? "" });
+    return new Response(bytes, {
+      headers: {
+        "content-type": mimeType,
+        "content-disposition": `attachment; filename*=UTF-8''${encodeURIComponent(name)}`,
+      },
+    });
   } catch (err) {
     return fail(c, err);
   }

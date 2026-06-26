@@ -169,6 +169,7 @@ export interface DocumentRow {
   status: string;
   version: number;
   tags: string[];
+  size: number | null;
   uploadedById: string;
   createdAt: string;
 }
@@ -475,6 +476,45 @@ export const api = {
   listDocuments: (matterId: string) => req<DocumentRow[]>(`/matters/${matterId}/documents`),
   registerDocument: (matterId: string, body: Record<string, unknown>) =>
     req<{ id: string }>(`/matters/${matterId}/documents`, { method: "POST", body: JSON.stringify(body) }),
+  uploadDocument: async (
+    matterId: string,
+    file: File,
+    opts: { name?: string; category?: string; folderId?: string } = {},
+  ): Promise<{ id: string }> => {
+    const token = getToken();
+    const fd = new FormData();
+    fd.append("file", file);
+    if (opts.name) fd.append("name", opts.name);
+    if (opts.category) fd.append("category", opts.category);
+    if (opts.folderId) fd.append("folderId", opts.folderId);
+    const res = await fetch(`/api/matters/${matterId}/documents/upload`, {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    return data as { id: string };
+  },
+  downloadDocument: async (id: string, fallbackName = "download"): Promise<void> => {
+    const token = getToken();
+    const res = await fetch(`/api/documents/${id}/download`, {
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = fallbackName;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  },
   moveDocument: (id: string, folderId: string | null) =>
     req<{ id: string }>(`/documents/${id}/move`, { method: "POST", body: JSON.stringify({ folderId }) }),
   submitDocument: (id: string) => req<{ status: string }>(`/documents/${id}/submit`, { method: "POST" }),

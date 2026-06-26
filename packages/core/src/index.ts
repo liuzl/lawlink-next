@@ -23,3 +23,4 @@ export * from "./reports/index.js";
 export * from "./notification/index.js";
 export * from "./schedule/index.js";
 export * from "./invoice/index.js";
+export * from "./storage/index.js";

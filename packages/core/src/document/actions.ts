@@ -5,9 +5,10 @@
  * DRAFT. Transitions are predicate-guarded (update ... WHERE status = expected)
  * so two concurrent reviewers can't both advance the same document.
  *
- * Binary bytes are out of scope here: `storageKey` is an opaque pointer the
- * upload adapter fills (R2/D1 infra, a later increment). This layer owns the
- * metadata, folder placement, lifecycle and soft-delete.
+ * Binary bytes live in the StorageAdapter (deps.storage), keyed by storageKey;
+ * uploadDocument writes the bytes then registers the metadata, and
+ * getDocumentForDownload access-checks then returns the bytes. registerDocument
+ * remains for metadata-only registration (an opaque external storageKey).
  */
 import { z } from "zod";
 import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
@@ -16,6 +17,12 @@ import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
+
+/** Hex SHA-256 of bytes via Web Crypto (Node ≥20 + Workers). */
+async function sha256Hex(bytes: Uint8Array): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", bytes);
+  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+}
 
 const CATEGORY = z.enum(["EVIDENCE", "PLEADING", "PROCEDURE", "JUDGMENT", "CONTRACT", "OTHER"]);
 
@@ -117,6 +124,72 @@ export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: 
     detail: { matterId: input.matterId, category: input.category, folderId: input.folderId ?? null },
   });
   return { id, name: input.name, status: "DRAFT" as const };
+}
+
+export const UploadDocumentInput = z.object({
+  matterId: z.string().min(1),
+  name: z.string().trim().min(1).max(200),
+  category: CATEGORY.default("OTHER"),
+  folderId: z.string().min(1).optional(),
+  sourceParty: z.string().max(120).optional(),
+  mimeType: z.string().max(120).optional(),
+  tags: z.array(z.string().max(40)).max(20).optional(),
+});
+
+/** Real-file upload: store the bytes in deps.storage, then register the Document
+ * metadata (storageKey/mimeType/size/sha256). Bytes are hashed for integrity. A
+ * failed registration removes the just-stored blob so no orphan is left. */
+export async function uploadDocument(
+  deps: Deps,
+  auth: AuthContext,
+  rawInput: unknown,
+  bytes: Uint8Array,
+) {
+  const input = UploadDocumentInput.parse(rawInput);
+  if (bytes.length === 0) throw new DomainError("VALIDATION", "文件内容为空");
+  if (bytes.length > 50 * 1024 * 1024) throw new DomainError("VALIDATION", "文件超过 50MB 上限");
+  const storageKey = `doc/${deps.ids.newId()}`;
+  const sha256 = await sha256Hex(bytes);
+  await deps.storage.put(storageKey, bytes, input.mimeType);
+  try {
+    return await registerDocument(deps, auth, {
+      matterId: input.matterId,
+      name: input.name,
+      category: input.category,
+      folderId: input.folderId,
+      sourceParty: input.sourceParty,
+      storageKey,
+      mimeType: input.mimeType,
+      size: bytes.length,
+      sha256,
+      tags: input.tags,
+    });
+  } catch (err) {
+    // Registration rejected (e.g. archived matter / bad folder) — drop the blob.
+    await deps.storage.delete(storageKey).catch(() => {});
+    throw err;
+  }
+}
+
+/** Authorize + fetch a document's bytes for download. Readable = matter access
+ * (archived matters still viewable). Throws if the doc has no stored bytes. */
+export async function getDocumentForDownload(deps: Deps, auth: AuthContext, rawInput: { documentId: string }) {
+  const [doc] = await deps.db
+    .select({ name: documents.name, matterId: documents.matterId, mimeType: documents.mimeType, storageKey: documents.storageKey, deletedAt: documents.deletedAt })
+    .from(documents)
+    .where(eq(documents.id, rawInput.documentId))
+    .limit(1);
+  if (!doc || doc.deletedAt) throw new DomainError("NOT_FOUND", "材料不存在");
+  if (doc.matterId) {
+    const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, doc.matterId)).limit(1);
+    if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
+    assertMatterAccess(m, auth);
+  } else {
+    requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER");
+  }
+  if (!doc.storageKey) throw new DomainError("INVALID_STATE", "该材料没有可下载的文件");
+  const bytes = await deps.storage.get(doc.storageKey);
+  return { name: doc.name, mimeType: doc.mimeType ?? "application/octet-stream", bytes };
 }
 
 export async function listDocuments(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {

@@ -118,6 +118,16 @@ export interface AuthContext {
   role: Role;
 }
 
+/** Blob/file storage for document bytes. The metadata (Document rows) lives in
+ * the db; the bytes live here, keyed by an opaque storageKey. Self-host uses a
+ * local-FS adapter; Cloudflare uses R2 (both implement this interface). */
+export interface StorageAdapter {
+  put(key: string, bytes: Uint8Array, contentType?: string): Promise<void>;
+  get(key: string): Promise<Uint8Array>; // throws NOT_FOUND-style error if absent
+  delete(key: string): Promise<void>;
+  exists(key: string): Promise<boolean>;
+}
+
 /** Injected, side-effecting collaborators. Swapped freely in tests / adapters. */
 export interface Deps {
   db: Database;
@@ -125,6 +135,7 @@ export interface Deps {
   clock: Clock;
   secrets: Secrets;
   audit: AuditSink;
+  storage: StorageAdapter;
 }
 
 /** Append-only audit trail (DOMAIN-SPEC §4.12). `record` is best-effort and
