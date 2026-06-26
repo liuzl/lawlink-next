@@ -62,12 +62,12 @@ export async function seedDefaultFolders(
 
 export async function listFolders(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
   const [m] = await deps.db
-    .select({ ownerId: matters.ownerId })
+    .select({ id: matters.id, ownerId: matters.ownerId })
     .from(matters)
     .where(eq(matters.id, rawInput.matterId))
     .limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth); // archived matters remain viewable
+  await assertMatterAccess(deps.db, m, auth); // archived matters remain viewable
   return await deps.db
     .select()
     .from(documentFolders)

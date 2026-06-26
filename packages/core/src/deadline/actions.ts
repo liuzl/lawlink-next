@@ -27,12 +27,12 @@ async function authorizedMatterOfProcedure(
   }
 
   const [matter] = await db
-    .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
+    .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, proc.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(matter, auth);
+  await assertMatterAccess(db as Deps["db"], matter, auth);
   if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读，不能修改期限");
   return { matterId: proc.matterId, category: matter.category as MatterCategory };
 }
@@ -176,12 +176,12 @@ export async function listMatterDeadlines(
   rawInput: { matterId: string },
 ) {
   const [matter] = await deps.db
-    .select({ ownerId: matters.ownerId })
+    .select({ id: matters.id, ownerId: matters.ownerId })
     .from(matters)
     .where(eq(matters.id, rawInput.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(matter, auth);
+  await assertMatterAccess(deps.db, matter, auth);
 
   // Only ENGAGED procedures' deadlines enter aggregates (DOMAIN-SPEC §3.2).
   return await deps.db
@@ -209,12 +209,12 @@ export async function completeDeadline(deps: Deps, auth: AuthContext, rawInput: 
   if (!dl) throw new DomainError("NOT_FOUND", "期限不存在");
 
   const [matter] = await deps.db
-    .select({ ownerId: matters.ownerId, status: matters.status })
+    .select({ id: matters.id, ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, dl.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(matter, auth);
+  await assertMatterAccess(deps.db, matter, auth);
   if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
 
   await deps.db

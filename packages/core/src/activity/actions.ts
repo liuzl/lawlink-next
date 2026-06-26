@@ -11,12 +11,12 @@ import { enqueueNotification } from "../notification/actions.js";
 /** Read access (archived matters are still viewable). */
 async function assertMatterReadable(db: Deps["db"], auth: AuthContext, matterId: string) {
   const [m] = await db
-    .select({ ownerId: matters.ownerId })
+    .select({ id: matters.id, ownerId: matters.ownerId })
     .from(matters)
     .where(eq(matters.id, matterId))
     .limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(db, m, auth);
 }
 
 /** Resolve an ENGAGED procedure's matter and assert WRITE access (§3.2, §6.6). */
@@ -59,7 +59,7 @@ export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) 
       .where(eq(users.id, input.assigneeId))
       .limit(1);
     if (!assignee || !assignee.active) throw new DomainError("VALIDATION", "被指派人无效");
-    if (!canAccessMatter(m, { userId: input.assigneeId, role: assignee.role as Role })) {
+    if (!(await canAccessMatter(deps.db, m, { userId: input.assigneeId, role: assignee.role as Role }))) {
       throw new DomainError("VALIDATION", "被指派人没有该案件的权限");
     }
   }

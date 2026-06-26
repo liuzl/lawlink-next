@@ -167,9 +167,9 @@ export async function assignSmsMatter(deps: Deps, auth: AuthContext, rawInput: u
   if (r.generatedHearingId || r.generatedDeadlineId) {
     throw new DomainError("INVALID_STATE", "该短信已生成开庭/期限，不能再改派案件");
   }
-  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
+  const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
   // Guard the WRITE (not just the earlier read) on no generated record, so a
   // generation committing between visibleSms and here can't be overwritten by a
   // stale reassignment — the update matches 0 rows and we reject.

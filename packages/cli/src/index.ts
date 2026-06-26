@@ -85,6 +85,8 @@ import {
   listMatterDeadlines,
   listMatterPreservations,
   listMatters,
+  listMatterMembers,
+  setMatterTeam,
   login,
   renewPreservation,
   scanPreservationExpiry,
@@ -386,6 +388,34 @@ matter
         engagement: opts.engagement,
         caseNumber: opts.caseNumber,
         handlingAgency: opts.handlingAgency,
+      }),
+    ),
+  );
+
+matter
+  .command("members")
+  .description("查看案件承办团队")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => listMatterMembers(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })),
+  );
+
+matter
+  .command("set-team")
+  .description("设置案件承办团队（主办/协办/助理），整体替换")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--owner <userId>", "主办律师用户 ID")
+  .option("--co-lead <ids>", "协办律师用户 ID，逗号分隔", "")
+  .option("--assistant <ids>", "助理用户 ID，逗号分隔", "")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      setMatterTeam(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        ownerId: opts.owner,
+        coLeadIds: String(opts.coLead).split(",").map((s: string) => s.trim()).filter(Boolean),
+        assistantIds: String(opts.assistant).split(",").map((s: string) => s.trim()).filter(Boolean),
       }),
     ),
   );

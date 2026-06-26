@@ -62,9 +62,9 @@ export async function createInvoiceRequest(deps: Deps, auth: AuthContext, rawInp
   const input = CreateInvoiceInput.parse(rawInput);
 
   if (input.matterId) {
-    const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
+    const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(m, auth); // matter lead / management
+    await assertMatterAccess(deps.db, m, auth); // matter lead / management
   }
   // 增值税专用发票（税法）：购方"六要素"——名称 + 税号 + 地址 + 电话 + 开户行 + 账号——全部必填。
   if (input.invoiceType === "SPECIAL") {
@@ -89,7 +89,7 @@ export async function createInvoiceRequest(deps: Deps, auth: AuthContext, rawInp
       for (const mid of distinctMatters) {
         const m = byId.get(mid);
         if (!m) throw new DomainError("NOT_FOUND", "开票依据文件不存在");
-        assertMatterAccess(m, auth); // throws NOT_FOUND if the requester can't access it
+        await assertMatterAccess(deps.db, m, auth); // throws NOT_FOUND if the requester can't access it
       }
     }
   }

@@ -11,12 +11,12 @@ import { DEFAULT_DURATION_DAYS, addDays, type PreservationPropertyType } from ".
 
 async function assertCanEditMatter(db: Deps["db"], auth: AuthContext, matterId: string) {
   const [matter] = await db
-    .select({ ownerId: matters.ownerId })
+    .select({ id: matters.id, ownerId: matters.ownerId })
     .from(matters)
     .where(eq(matters.id, matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(matter, auth);
+  await assertMatterAccess(db, matter, auth);
 }
 
 const PROPERTY_TYPES = ["BANK_DEPOSIT", "REAL_ESTATE", "VEHICLE", "EQUITY", "IP", "OTHER"] as const;
@@ -87,12 +87,12 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
     if (!p) throw new DomainError("NOT_FOUND", "保全不存在");
 
     const [matter] = await tx
-      .select({ ownerId: matters.ownerId, status: matters.status })
+      .select({ id: matters.id, ownerId: matters.ownerId, status: matters.status })
       .from(matters)
       .where(eq(matters.id, p.matterId))
       .limit(1);
     if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(matter, auth);
+    await assertMatterAccess(deps.db, matter, auth);
     if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
 
     // Renewal extends a STILL-ACTIVE preservation. A lapsed (EXPIRED or

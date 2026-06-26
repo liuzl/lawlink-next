@@ -106,6 +106,10 @@ export type NotificationType =
 export type NotificationPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
 
 /** Invoice-request lifecycle (开票, DOMAIN-SPEC §5.4). */
+/** Matter team membership role (主办 / 协办 / 助理). Distinct from the firm-level
+ * user Role — a LAWYER user can be LEAD on one matter and ASSISTANT on another. */
+export type MatterMemberRole = "LEAD" | "CO_LEAD" | "ASSISTANT";
+
 export type InvoiceRequestStatus = "PENDING" | "APPROVED" | "ISSUED" | "REJECTED";
 /** 普通发票 / 增值税专用发票. */
 export type InvoiceType = "PLAIN" | "SPECIAL";

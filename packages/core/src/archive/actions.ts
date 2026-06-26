@@ -10,12 +10,12 @@ import { requiredChecklist } from "./checklists.js";
 /** The required checklist for a matter (for the UI to render). */
 export async function getArchiveChecklist(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
   const [m] = await deps.db
-    .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
+    .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, rawInput.matterId))
     .limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
   return { required: requiredChecklist(m.category as MatterCategory), status: m.status };
 }
 
@@ -41,12 +41,12 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
 
   const result = await deps.db.transaction(async (tx) => {
     const [m] = await tx
-      .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
+      .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
       .from(matters)
       .where(eq(matters.id, input.matterId))
       .limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(m, auth);
+    await assertMatterAccess(deps.db, m, auth);
 
     // Idempotent: an already-archived matter returns its existing record rather
     // than failing a retry.

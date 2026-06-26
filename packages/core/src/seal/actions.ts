@@ -114,9 +114,9 @@ export async function createSealRequest(deps: Deps, auth: AuthContext, rawInput:
   // populated here; a null would only arise from a future doc-module change.
   const matterId = input.matterId ?? draft.matterId ?? null;
   if (!matterId) throw new DomainError("VALIDATION", "用印申请必须关联案件（待盖章稿需归属案件）");
-  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
+  const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
 
   // Resubmission: the parent must be a REJECTED request the same user owns.
   if (input.parentSealRequestId) {
@@ -281,9 +281,9 @@ export async function stampSealRequest(deps: Deps, auth: AuthContext, rawInput: 
   // document in the matter is reachable to a matter-access user, so the
   // same-matter scan is legitimately theirs to attach. ADMIN/management pass.
   if (!r.matterId) throw new DomainError("INVALID_STATE", "用印申请缺少关联案件，无法登记盖章");
-  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matterId)).limit(1);
+  const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, r.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
   const stampedDoc = await loadDocument(deps, input.stampedDocId); // 盖章后扫描件必补
   // The official post-stamp record must belong to the SAME matter as the seal —
   // fail closed, so a Document id from another case can't be bound as the record.

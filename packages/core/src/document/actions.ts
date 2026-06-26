@@ -203,9 +203,9 @@ export async function getDocumentForDownload(deps: Deps, auth: AuthContext, rawI
     .limit(1);
   if (!doc || doc.deletedAt) throw new DomainError("NOT_FOUND", "材料不存在");
   if (doc.matterId) {
-    const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, doc.matterId)).limit(1);
+    const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(eq(matters.id, doc.matterId)).limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(m, auth);
+    await assertMatterAccess(deps.db, m, auth);
   } else {
     requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER");
   }
@@ -216,12 +216,12 @@ export async function getDocumentForDownload(deps: Deps, auth: AuthContext, rawI
 
 export async function listDocuments(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
   const [m] = await deps.db
-    .select({ ownerId: matters.ownerId })
+    .select({ id: matters.id, ownerId: matters.ownerId })
     .from(matters)
     .where(eq(matters.id, rawInput.matterId))
     .limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth); // archived matters remain viewable
+  await assertMatterAccess(deps.db, m, auth); // archived matters remain viewable
   const rows = await deps.db
     .select()
     .from(documents)

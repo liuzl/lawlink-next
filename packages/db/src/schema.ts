@@ -89,6 +89,24 @@ export const matters = sqliteTable(
   (t) => [index("Matter_status_idx").on(t.status)],
 );
 
+/** Matter team membership (主办/协办/助理). The owner (matters.ownerId) is also
+ * carried here as the LEAD member so a single roster drives access + display.
+ * role: LEAD | CO_LEAD | ASSISTANT. One membership per (matter, user). */
+export const matterMembers = sqliteTable(
+  "MatterMember",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    userId: text("user_id").notNull(),
+    role: text("role").notNull().default("ASSISTANT"),
+    joinedAt: integer("joined_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("MatterMember_matter_user_uq").on(t.matterId, t.userId),
+    index("MatterMember_user_idx").on(t.userId),
+  ],
+);
+
 /** Parties of an intake or matter — the conflict-check search corpus. */
 export const parties = sqliteTable(
   "Party",

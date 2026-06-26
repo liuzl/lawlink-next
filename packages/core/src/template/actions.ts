@@ -264,9 +264,9 @@ export async function previewTemplate(deps: Deps, auth: AuthContext, rawInput: u
   const input = PreviewTemplateInput.parse(rawInput);
   const [t] = await deps.db.select().from(documentTemplates).where(eq(documentTemplates.id, input.templateId)).limit(1);
   if (!t || !t.enabled) throw new DomainError("NOT_FOUND", "模板不存在");
-  const [m] = await deps.db.select({ ownerId: matters.ownerId, category: matters.category }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
+  const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId, category: matters.category }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
   // Same applicability gate as generateFromTemplate — preview must not leak a
   // template's variables/metadata for a matter category it can't be used on.
   const applicable = JSON.parse(t.applicableCategoriesJson) as string[];
@@ -298,9 +298,9 @@ export async function generateFromTemplate(deps: Deps, auth: AuthContext, rawInp
   const input = GenerateTemplateInput.parse(rawInput);
   const [t] = await deps.db.select().from(documentTemplates).where(eq(documentTemplates.id, input.templateId)).limit(1);
   if (!t || !t.enabled) throw new DomainError("NOT_FOUND", "模板不存在");
-  const [m] = await deps.db.select({ ownerId: matters.ownerId, category: matters.category }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
+  const [m] = await deps.db.select({ id: matters.id, ownerId: matters.ownerId, category: matters.category }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(deps.db, m, auth);
   const applicable = JSON.parse(t.applicableCategoriesJson) as string[];
   if (applicable.length && !applicable.includes(m.category)) {
     throw new DomainError("VALIDATION", "该模板不适用于本案件类别");

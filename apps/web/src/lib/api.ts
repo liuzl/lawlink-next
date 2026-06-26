@@ -335,6 +335,15 @@ export interface UserRow {
   role: string;
   active: boolean;
 }
+export type MatterMemberRole = "LEAD" | "CO_LEAD" | "ASSISTANT";
+export interface MatterMemberRow {
+  userId: string;
+  role: MatterMemberRole;
+  joinedAt: string;
+  name: string;
+  userRole: string;
+  active: boolean;
+}
 export interface SettingRow {
   key: string;
   value: unknown;
@@ -436,6 +445,12 @@ export const api = {
     req<ConflictResult>("/conflicts/check", { method: "POST", body: JSON.stringify(body) }),
   listMatters: () => req<MatterRow[]>("/matters"),
   getMatter: (id: string) => req<MatterDetail>(`/matters/${id}`),
+  listMatterMembers: (id: string) => req<MatterMemberRow[]>(`/matters/${id}/members`),
+  setMatterTeam: (id: string, body: { ownerId: string; coLeadIds: string[]; assistantIds: string[] }) =>
+    req<{ matterId: string; ownerId: string }>(`/matters/${id}/team`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
   addProcedure: (id: string, body: Record<string, unknown>) =>
     req<ProcedureRow>(`/matters/${id}/procedures`, {
       method: "POST",

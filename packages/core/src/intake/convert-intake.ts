@@ -8,7 +8,7 @@
  */
 import { z } from "zod";
 import { and, eq, notInArray, sql } from "drizzle-orm";
-import { counters, intakes, matters, parties } from "@lawlink/db";
+import { counters, intakes, matterMembers, matters, parties } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { INTERNAL_CODE_PREFIX, counterKey, formatInternalCode } from "../matter/internal-code.js";
@@ -76,6 +76,17 @@ export async function convertIntake(
       ownerId: auth.userId,
       intakeId,
       createdAt: now,
+    });
+
+    // 3b. Seed the team roster with the owner as LEAD (主办). The roster drives
+    //     both access and team display; keeping the owner here means a single
+    //     source of truth (no special-casing ownerId outside the roster).
+    await tx.insert(matterMembers).values({
+      id: deps.ids.newId(),
+      matterId,
+      userId: auth.userId,
+      role: "LEAD",
+      joinedAt: now,
     });
 
     // 4. Attach the Matter to the intake's existing party rows IN PLACE — do not

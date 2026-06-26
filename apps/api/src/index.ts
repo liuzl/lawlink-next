@@ -89,6 +89,8 @@ import {
   listMatterDeadlines,
   listMatterPreservations,
   listMatters,
+  listMatterMembers,
+  setMatterTeam,
   login,
   renewPreservation,
   requireJwtSecret,
@@ -304,6 +306,23 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
       await addProcedure(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/members", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterMembers(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.put("/api/matters/:id/team", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await setMatterTeam(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

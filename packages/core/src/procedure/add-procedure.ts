@@ -31,12 +31,12 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
 
   const result = await deps.db.transaction(async (tx) => {
     const [matter] = await tx
-      .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
+      .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
       .from(matters)
       .where(eq(matters.id, input.matterId))
       .limit(1);
     if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(matter, auth);
+    await assertMatterAccess(deps.db, matter, auth);
     if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读，不能新增程序");
 
     const category = matter.category as MatterCategory;

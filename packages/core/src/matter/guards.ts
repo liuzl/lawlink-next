@@ -12,14 +12,14 @@ export async function assertMatterWritable(
   db: Deps["db"],
   auth: AuthContext,
   matterId: string,
-): Promise<{ ownerId: string }> {
+): Promise<{ id: string; ownerId: string }> {
   const [m] = await db
-    .select({ ownerId: matters.ownerId, status: matters.status })
+    .select({ id: matters.id, ownerId: matters.ownerId, status: matters.status })
     .from(matters)
     .where(eq(matters.id, matterId))
     .limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  assertMatterAccess(m, auth);
+  await assertMatterAccess(db, m, auth);
   if (m.status === "ARCHIVED") {
     throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能修改");
   }

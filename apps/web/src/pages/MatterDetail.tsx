@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { TeamPanel } from "@/components/TeamPanel";
 
 const PROC_CN: Record<string, string> = {
   FIRST_INSTANCE: "一审", SECOND_INSTANCE: "二审", RETRIAL_REVIEW: "再审审查", RETRIAL: "再审",
@@ -669,6 +670,8 @@ export function MatterDetail() {
           {matter.parties.length === 0 && <span className="text-xs text-muted-foreground">无</span>}
         </CardContent>
       </Card>
+
+      <TeamPanel matterId={matter.id} canManage={canEdit} onOwnerChanged={() => id && api.getMatter(id).then(setMatter)} />
 
       <Card>
         <CardHeader className="pb-3">
