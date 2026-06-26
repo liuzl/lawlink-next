@@ -6,6 +6,7 @@
  * db for the D1 binding (`createD1Db(c.env.DB)`).
  */
 import { randomUUID } from "node:crypto";
+import { ZodError } from "zod";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
@@ -64,7 +65,11 @@ const STATUS: Record<DomainError["code"], 400 | 403 | 404 | 409> = {
 
 function fail(c: Context, err: unknown) {
   if (err instanceof DomainError) return c.json({ error: err.message }, STATUS[err.code]);
-  // Non-domain errors (e.g. missing JWT secret config) are server-side faults.
+  // Input validation failures are client errors, not server faults.
+  if (err instanceof ZodError) {
+    return c.json({ error: err.issues.map((i) => i.message).join("；") }, 400);
+  }
+  // Other non-domain errors (e.g. missing JWT secret config) are server-side faults.
   return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 }
 

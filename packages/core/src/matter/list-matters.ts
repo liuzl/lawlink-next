@@ -3,7 +3,7 @@
 import { desc, eq } from "drizzle-orm";
 import { matterProcedures, matters, parties } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
-import { isManagement } from "../permissions.js";
+import { isManagement, maskId } from "../permissions.js";
 import { assertMatterAccess } from "./access.js";
 
 export async function listMatters(deps: Deps, auth: AuthContext) {
@@ -43,5 +43,9 @@ export async function getMatter(deps: Deps, auth: AuthContext, rawInput: { matte
     .from(parties)
     .where(eq(parties.matterId, matter.id));
 
-  return { ...matter, procedures, parties: matterParties };
+  // §9.4: full ID numbers only for management or the matter owner (主办).
+  const fullId = isManagement(auth) || matter.ownerId === auth.userId;
+  const maskedParties = matterParties.map((p) => ({ ...p, idNumber: maskId(p.idNumber, fullId) }));
+
+  return { ...matter, procedures, parties: maskedParties };
 }

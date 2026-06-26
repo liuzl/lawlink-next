@@ -9,15 +9,7 @@ import { z } from "zod";
 import { asc, eq, isNull, and } from "drizzle-orm";
 import { clients, contacts } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
-import { isManagement, requireRole } from "../permissions.js";
-
-/** Mask all but the first 3 and last 2 chars unless the caller is management. */
-export function maskIdNumber(idNumber: string | null, auth: AuthContext): string | null {
-  if (!idNumber) return null;
-  if (isManagement(auth)) return idNumber;
-  if (idNumber.length <= 5) return "*".repeat(idNumber.length);
-  return idNumber.slice(0, 3) + "*".repeat(idNumber.length - 5) + idNumber.slice(-2);
-}
+import { maskIdNumber, requireRole } from "../permissions.js";
 
 export const CreateClientInput = z.object({
   name: z.string().min(1).max(200),
