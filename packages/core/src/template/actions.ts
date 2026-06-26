@@ -49,37 +49,63 @@ const MAX_CENTRAL_DIR_BYTES = 8 * 1024 * 1024; // central-directory region cap
 const MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024; // 100MB expanded
 const MAX_COMPRESSION_RATIO = 200; // declared-uncompressed / on-disk bytes
 
-/** Byte-level ZIP preflight: read the End-Of-Central-Directory record straight
- * from the upload bytes and reject before `new PizZip()` ever allocates entry
- * objects. This blocks parser-level DoS from archives that pack hundreds of
- * thousands of tiny central-directory records under the 20MB upload cap — a
- * threat the post-parse uncompressed-size/ratio checks do not cover. */
+/** Byte-level ZIP preflight that runs before `new PizZip()` allocates any entry
+ * objects. PizZip walks central-directory records by signature (it does NOT
+ * honor the EOCD-declared count), so the EOCD count cannot be trusted as a
+ * bound. Instead we locate the EOCD, derive the central-directory start, then
+ * scan the actual `0x02014b50` records ourselves — walking each record by its
+ * declared lengths and rejecting the instant the real count exceeds the cap.
+ * This is the same record stream PizZip would allocate, so the two cannot
+ * disagree; it blocks parser-level DoS (hundreds of thousands of tiny records
+ * under the 20MB upload cap) that the post-parse size/ratio checks don't cover. */
 function preScanZip(bytes: Uint8Array): void {
   const n = bytes.length;
   if (n < 22) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // Scan backward (within the max 64KB ZIP comment window) for the EOCD sig.
+  // Scan backward (within the max 64KB ZIP comment window) for an EOCD record
+  // whose declared comment length lands its end exactly at EOF — this rejects a
+  // stray 0x06054b50 sequence sitting inside file data.
   const maxBack = Math.min(n, 22 + 0xffff);
   let eocd = -1;
   for (let i = n - 22; i >= n - maxBack; i--) {
-    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (dv.getUint32(i, true) === 0x06054b50 && i + 22 + dv.getUint16(i + 20, true) === n) {
+      eocd = i;
+      break;
+    }
   }
   if (eocd < 0) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
-  let count = dv.getUint16(eocd + 10, true);
+
   let cdSize = dv.getUint32(eocd + 12, true);
-  // Zip64: the 16/32-bit fields are maxed out → read the true 64-bit values.
-  if (count === 0xffff || cdSize === 0xffffffff) {
+  let cdOffset = dv.getUint32(eocd + 16, true);
+  // Zip64: any maxed-out 16/32-bit field → read the authoritative 64-bit values.
+  if (cdSize === 0xffffffff || cdOffset === 0xffffffff || dv.getUint16(eocd + 10, true) === 0xffff) {
     const locOff = eocd - 20;
     if (locOff >= 0 && dv.getUint32(locOff, true) === 0x07064b50) {
       const z64 = Number(dv.getBigUint64(locOff + 8, true));
       if (z64 >= 0 && z64 + 56 <= n && dv.getUint32(z64, true) === 0x06064b50) {
-        count = Number(dv.getBigUint64(z64 + 32, true));
         cdSize = Number(dv.getBigUint64(z64 + 40, true));
+        cdOffset = Number(dv.getBigUint64(z64 + 48, true));
       }
     }
   }
-  if (count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
-  if (cdSize > MAX_CENTRAL_DIR_BYTES) throw new DomainError("VALIDATION", "docx 目录区过大");
+  if (cdOffset < 0 || cdOffset > eocd || cdSize > MAX_CENTRAL_DIR_BYTES) {
+    throw new DomainError("VALIDATION", "docx 目录区异常");
+  }
+
+  // Authoritative scan: count real central-file-header records, walking each by
+  // its declared lengths, bounded by [cdOffset, eocd). We never trust cdSize to
+  // shrink the window. Each record advances pos by ≥ 46, and we throw at the cap,
+  // so this loops at most MAX_ARCHIVE_ENTRIES + 1 times regardless of forged data.
+  let pos = cdOffset;
+  let count = 0;
+  while (pos + 46 <= eocd) {
+    if (dv.getUint32(pos, true) !== 0x02014b50) break; // end of central directory
+    if (++count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
+    const nameLen = dv.getUint16(pos + 28, true);
+    const extraLen = dv.getUint16(pos + 30, true);
+    const cmtLen = dv.getUint16(pos + 32, true);
+    pos += 46 + nameLen + extraLen + cmtLen;
+  }
 }
 
 /** Reject archives whose declared expansion exceeds conservative limits. Reads
