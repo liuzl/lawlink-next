@@ -12,6 +12,12 @@
   },
   "dependencies": {
     "@lawlink/db": "workspace:*",
+    "bcryptjs": "^2.4.3",
+    "drizzle-orm": "^0.38.3",
+    "jose": "^5.9.6",
     "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6"
   }
 }

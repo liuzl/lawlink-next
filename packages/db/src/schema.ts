@@ -28,6 +28,7 @@ export const intakes = sqliteTable("Intake", {
   status: text("status").notNull().default("INTAKE"),
   claimAmount: text("claim_amount"),
   clientName: text("client_name").notNull(),
+  declinedReason: text("declined_reason"),
   createdById: text("created_by_id").notNull(),
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });

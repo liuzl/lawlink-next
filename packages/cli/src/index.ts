@@ -4,16 +4,26 @@
  *
  * A thin adapter over @lawlink/core: parse args -> assemble Deps + AuthContext
  * -> call a core use case -> print structured JSON (default). See
- * docs/REARCHITECTURE-PLAN.md §4 for the CLI design (layered commands, Skills,
- * JSON-first output) and §4.5 for the larksuite/cli-inspired principles.
- *
- * P0 skeleton: one command (`intake create`) and a stub AuthContext from env.
- * Real auth (JWT/login) lands with the API in P1.
+ * docs/REARCHITECTURE-PLAN.md §4 (CLI design) and §4.5 (larksuite-inspired
+ * principles). Business logic lives entirely in @lawlink/core.
  */
 import { randomUUID } from "node:crypto";
 import { Command } from "commander";
-import { createIntake, type AuthContext, type Deps, type Role } from "@lawlink/core";
-import { createDb } from "@lawlink/db";
+import {
+  createIntake,
+  declineIntake,
+  hashPassword,
+  login,
+  verifyToken,
+  type AuthContext,
+  type Deps,
+  type Role,
+} from "@lawlink/core";
+import { createDb, runMigrations, users } from "@lawlink/db";
+
+function jwtSecret(): string {
+  return process.env.LAWLINK_JWT_SECRET ?? "dev-secret-change-me";
+}
 
 function buildDeps(): Deps {
   const url = process.env.LAWLINK_DB_URL ?? "file:./lawlink.db";
@@ -21,11 +31,13 @@ function buildDeps(): Deps {
     db: createDb(url),
     ids: { newId: () => randomUUID() },
     clock: { now: () => new Date() },
+    secrets: { jwt: jwtSecret() },
   };
 }
 
-// Stub identity until real auth (P1). Agents/scripts pass it via env for now.
-function stubAuth(): AuthContext {
+/** Resolve the caller: a verified token if given, else an env stub (dev only). */
+async function resolveAuth(token?: string): Promise<AuthContext> {
+  if (token) return verifyToken(jwtSecret(), token);
   return {
     userId: process.env.LAWLINK_USER_ID ?? "cli-user",
     role: (process.env.LAWLINK_ROLE as Role) ?? "LAWYER",
@@ -33,11 +45,18 @@ function stubAuth(): AuthContext {
 }
 
 function emit(format: string, data: unknown): void {
-  if (format === "json") {
-    process.stdout.write(JSON.stringify(data, null, 2) + "\n");
-  } else {
-    process.stdout.write(String(data) + "\n");
-  }
+  if (format === "text") process.stdout.write(String(data) + "\n");
+  else process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+}
+
+/** Run an action, printing JSON errors and setting a non-zero exit code. */
+function run(fn: () => Promise<unknown>, format = "json"): void {
+  fn()
+    .then((data) => emit(format, data))
+    .catch((err) => {
+      emit("json", { error: err instanceof Error ? err.message : String(err) });
+      process.exitCode = 1;
+    });
 }
 
 const program = new Command();
@@ -46,32 +65,95 @@ program
   .description("LawLink CLI — case management for lawyers, built for humans and agents")
   .version("0.0.0");
 
+// ── db ────────────────────────────────────────────────────────────────────
+const db = program.command("db").description("数据库维护");
+
+db.command("migrate")
+  .description("Apply pending migrations")
+  .action(() =>
+    run(async () => {
+      await runMigrations(buildDeps().db);
+      return { migrated: true };
+    }),
+  );
+
+db.command("seed")
+  .description("Seed an admin + a sample lawyer account")
+  .action(() =>
+    run(async () => {
+      const deps = buildDeps();
+      const now = deps.clock.now();
+      const accounts = [
+        { email: "admin@lawlink.local", name: "系统管理员", role: "ADMIN", pw: process.env.LAWLINK_SEED_PASSWORD ?? "ChangeMe!2026" },
+        { email: "lawyer@lawlink.local", name: "示例律师", role: "LAWYER", pw: "lawyer123" },
+      ];
+      const rows = await Promise.all(
+        accounts.map(async (a) => ({
+          id: deps.ids.newId(),
+          name: a.name,
+          email: a.email,
+          passwordHash: await hashPassword(a.pw),
+          role: a.role,
+          active: true,
+          createdAt: now,
+        })),
+      );
+      await deps.db.insert(users).values(rows);
+      return { seeded: accounts.map((a) => ({ email: a.email, role: a.role })) };
+    }),
+  );
+
+// ── auth ──────────────────────────────────────────────────────────────────
+const auth = program.command("auth").description("登录与身份");
+
+auth
+  .command("login")
+  .requiredOption("--email <email>")
+  .requiredOption("--password <password>")
+  .action((opts) => run(() => login(buildDeps(), opts)));
+
+auth
+  .command("whoami")
+  .requiredOption("--token <token>")
+  .action((opts) => run(() => resolveAuth(opts.token)));
+
+// ── intake ──────────────────────────────────────────────────────────────────
 const intake = program.command("intake").description("收案登记 / intake registration");
 
 intake
   .command("create")
-  .description("Register a new intake")
   .requiredOption("--client-name <name>", "委托方名称")
-  .requiredOption(
-    "--category <category>",
-    "案件类别 (CIVIL_COMMERCIAL|CRIMINAL|ADMINISTRATIVE|NON_LITIGATION|LEGAL_COUNSEL|SPECIAL_PROJECT)",
-  )
+  .requiredOption("--category <category>", "案件类别")
   .option("--title <title>", "标题（留空自动生成）")
   .option("--claim-amount <amount>", "标的额（最多两位小数）")
-  .option("--format <format>", "output format: json|text", "json")
-  .action(async (opts) => {
-    try {
-      const result = await createIntake(buildDeps(), stubAuth(), {
-        title: opts.title,
-        category: opts.category,
-        clientName: opts.clientName,
-        claimAmount: opts.claimAmount,
-      });
-      emit(opts.format, result);
-    } catch (err) {
-      emit("json", { error: err instanceof Error ? err.message : String(err) });
-      process.exitCode = 1;
-    }
-  });
+  .option("--token <token>", "登录态（缺省用 env stub）")
+  .option("--format <format>", "json|text", "json")
+  .action((opts) =>
+    run(
+      async () =>
+        createIntake(buildDeps(), await resolveAuth(opts.token), {
+          title: opts.title,
+          category: opts.category,
+          clientName: opts.clientName,
+          claimAmount: opts.claimAmount,
+        }),
+      opts.format,
+    ),
+  );
+
+intake
+  .command("decline")
+  .description("标记不接案（仅 ADMIN / PRINCIPAL_LAWYER）")
+  .requiredOption("--intake-id <id>")
+  .requiredOption("--reason <reason>")
+  .requiredOption("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      declineIntake(buildDeps(), await resolveAuth(opts.token), {
+        intakeId: opts.intakeId,
+        reason: opts.reason,
+      }),
+    ),
+  );
 
 program.parseAsync(process.argv);

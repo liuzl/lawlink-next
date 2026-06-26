@@ -18,6 +18,14 @@ export type Role =
   | "ASSISTANT"
   | "FINANCE";
 
+export const ROLES: readonly Role[] = [
+  "ADMIN",
+  "PRINCIPAL_LAWYER",
+  "LAWYER",
+  "ASSISTANT",
+  "FINANCE",
+];
+
 /** Case category (DOMAIN-SPEC §4.1). */
 export type MatterCategory =
   | "CIVIL_COMMERCIAL"
@@ -34,8 +42,8 @@ export type IntakeStatus =
   | "CONVERTED"
   | "DECLINED";
 
-/** The authenticated caller. Assembled by each entry shell (API/CLI), never
- * read implicitly from a request/session inside the core. */
+/** The authenticated caller. Assembled by each entry shell (API/CLI) from a
+ * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {
   userId: string;
   role: Role;
@@ -46,6 +54,12 @@ export interface Deps {
   db: Database;
   ids: IdGen;
   clock: Clock;
+  secrets: Secrets;
+}
+
+export interface Secrets {
+  /** HMAC secret for signing/verifying session JWTs. */
+  jwt: string;
 }
 
 export interface IdGen {
