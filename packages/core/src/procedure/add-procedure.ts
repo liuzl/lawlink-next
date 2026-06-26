@@ -8,7 +8,7 @@
  *   so concurrent adds get distinct orders without racing the unique constraint.
  */
 import { z } from "zod";
-import { eq, sql } from "drizzle-orm";
+import { eq, max, sql } from "drizzle-orm";
 import { counters, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -46,10 +46,19 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
       );
     }
 
-    // Atomic per-matter order — no read-then-write race against unique(matterId, order).
+    // Atomic per-matter order. The counter SELF-INITIALIZES from the current
+    // MAX(order) on first use, so matters that already have procedures (created
+    // before this counter existed) don't collide with unique(matterId, order).
+    // Subsequent (concurrent) callers hit the conflict path and atomically +1.
+    const [{ maxOrder }] = await tx
+      .select({ maxOrder: max(matterProcedures.order) })
+      .from(matterProcedures)
+      .where(eq(matterProcedures.matterId, input.matterId));
+    const seed = (maxOrder ?? 0) + 1;
+
     const [counter] = await tx
       .insert(counters)
-      .values({ key: `proc-order-${input.matterId}`, value: 1 })
+      .values({ key: `proc-order-${input.matterId}`, value: seed })
       .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
       .returning({ value: counters.value });
     const order = counter.value;
