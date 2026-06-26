@@ -45,8 +45,42 @@ function dottedParser(tag: string) {
 // We inspect the central-directory sizes (no decompression) before docxtemplater
 // parses, and cap entry count, total uncompressed size, and compression ratio.
 const MAX_ARCHIVE_ENTRIES = 512;
+const MAX_CENTRAL_DIR_BYTES = 8 * 1024 * 1024; // central-directory region cap
 const MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024; // 100MB expanded
 const MAX_COMPRESSION_RATIO = 200; // declared-uncompressed / on-disk bytes
+
+/** Byte-level ZIP preflight: read the End-Of-Central-Directory record straight
+ * from the upload bytes and reject before `new PizZip()` ever allocates entry
+ * objects. This blocks parser-level DoS from archives that pack hundreds of
+ * thousands of tiny central-directory records under the 20MB upload cap — a
+ * threat the post-parse uncompressed-size/ratio checks do not cover. */
+function preScanZip(bytes: Uint8Array): void {
+  const n = bytes.length;
+  if (n < 22) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  // Scan backward (within the max 64KB ZIP comment window) for the EOCD sig.
+  const maxBack = Math.min(n, 22 + 0xffff);
+  let eocd = -1;
+  for (let i = n - 22; i >= n - maxBack; i--) {
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+  }
+  if (eocd < 0) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
+  let count = dv.getUint16(eocd + 10, true);
+  let cdSize = dv.getUint32(eocd + 12, true);
+  // Zip64: the 16/32-bit fields are maxed out → read the true 64-bit values.
+  if (count === 0xffff || cdSize === 0xffffffff) {
+    const locOff = eocd - 20;
+    if (locOff >= 0 && dv.getUint32(locOff, true) === 0x07064b50) {
+      const z64 = Number(dv.getBigUint64(locOff + 8, true));
+      if (z64 >= 0 && z64 + 56 <= n && dv.getUint32(z64, true) === 0x06064b50) {
+        count = Number(dv.getBigUint64(z64 + 32, true));
+        cdSize = Number(dv.getBigUint64(z64 + 40, true));
+      }
+    }
+  }
+  if (count > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
+  if (cdSize > MAX_CENTRAL_DIR_BYTES) throw new DomainError("VALIDATION", "docx 目录区过大");
+}
 
 /** Reject archives whose declared expansion exceeds conservative limits. Reads
  * the per-entry uncompressedSize PizZip records from the zip headers — no entry
@@ -67,6 +101,7 @@ function assertSafeArchive(zip: PizZip, compressedLen: number): void {
 
 /** Validate the bytes are a real .docx (a zip containing word/document.xml). */
 function openDocx(bytes: Uint8Array): PizZip {
+  preScanZip(bytes); // byte-level EOCD guard BEFORE PizZip allocates entries
   let zip: PizZip;
   try {
     zip = new PizZip(bytes);
