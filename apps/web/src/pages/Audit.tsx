@@ -24,6 +24,7 @@ const ACTION_CN: Record<string, string> = {
   PRESERVATION_CREATE: "新增保全",
   PRESERVATION_RENEW: "保全续期",
   PRESERVATION_LIFT: "解除保全",
+  PRESERVATION_EXPIRE_SCAN: "保全到期扫描",
   TASK_CREATE: "新建任务",
   TASK_COMPLETE: "完成任务",
   NOTE_CREATE: "沟通记录",

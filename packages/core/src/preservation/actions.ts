@@ -223,5 +223,18 @@ export async function scanPreservationExpiry(deps: Deps): Promise<{ expired: num
       ),
     )
     .returning({ id: preservations.id });
+  // This is an unattended system mutation of legal-preservation state — record
+  // it under a SYSTEM actor when anything actually expired (empty scans are
+  // silent to avoid log noise). The affected ids make the change reconstructable.
+  if (updated.length > 0) {
+    await deps.audit.record(
+      { userId: "system" },
+      {
+        action: "PRESERVATION_EXPIRE_SCAN",
+        targetType: "Preservation",
+        detail: { expired: updated.length, ids: updated.map((u) => u.id) },
+      },
+    );
+  }
   return { expired: updated.length };
 }
