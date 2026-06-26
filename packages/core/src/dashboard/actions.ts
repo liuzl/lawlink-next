@@ -38,6 +38,24 @@ export async function getDashboard(deps: Deps, auth: AuthContext) {
     .from(intakes)
     .where(and(inArray(intakes.status, ["INTAKE", "PENDING_CONFIRMATION"]), intakeScope));
 
+  // Deadlines: join procedures matter-scoped (procedure.matterId = deadline.matterId)
+  // so a drifted row can't be judged by another matter's procedure engagement.
+  const dlProcJoin = and(
+    eq(deadlines.procedureId, matterProcedures.id),
+    eq(matterProcedures.matterId, deadlines.matterId),
+  );
+  const dlWhere = and(
+    eq(deadlines.completed, false),
+    eq(matterProcedures.engagement, "ENGAGED"),
+    lte(deadlines.dueAt, horizon),
+    matterVis,
+  );
+  const [{ dlCount }] = await deps.db
+    .select({ dlCount: sql<number>`count(*)` })
+    .from(deadlines)
+    .innerJoin(matterProcedures, dlProcJoin)
+    .innerJoin(matters, eq(deadlines.matterId, matters.id))
+    .where(dlWhere);
   const upcomingDeadlines = await deps.db
     .select({
       id: deadlines.id,
@@ -49,19 +67,22 @@ export async function getDashboard(deps: Deps, auth: AuthContext) {
       matterTitle: matters.title,
     })
     .from(deadlines)
-    .innerJoin(matterProcedures, eq(deadlines.procedureId, matterProcedures.id))
+    .innerJoin(matterProcedures, dlProcJoin)
     .innerJoin(matters, eq(deadlines.matterId, matters.id))
-    .where(
-      and(
-        eq(deadlines.completed, false),
-        eq(matterProcedures.engagement, "ENGAGED"),
-        lte(deadlines.dueAt, horizon),
-        matterVis,
-      ),
-    )
+    .where(dlWhere)
     .orderBy(asc(deadlines.dueAt))
     .limit(50);
 
+  const presWhere = and(
+    inArray(preservations.status, ["ACTIVE", "RENEWED"]),
+    lte(preservations.expiryDate, horizon),
+    matterVis,
+  );
+  const [{ presCount }] = await deps.db
+    .select({ presCount: sql<number>`count(*)` })
+    .from(preservations)
+    .innerJoin(matters, eq(preservations.matterId, matters.id))
+    .where(presWhere);
   const expiringPreservations = await deps.db
     .select({
       id: preservations.id,
@@ -76,13 +97,7 @@ export async function getDashboard(deps: Deps, auth: AuthContext) {
     })
     .from(preservations)
     .innerJoin(matters, eq(preservations.matterId, matters.id))
-    .where(
-      and(
-        inArray(preservations.status, ["ACTIVE", "RENEWED"]),
-        lte(preservations.expiryDate, horizon),
-        matterVis,
-      ),
-    )
+    .where(presWhere)
     .orderBy(asc(preservations.expiryDate))
     .limit(50);
 
@@ -90,8 +105,9 @@ export async function getDashboard(deps: Deps, auth: AuthContext) {
     counts: {
       activeMatters: Number(activeMatters),
       pendingIntakes: Number(pendingIntakes),
-      upcomingDeadlines: upcomingDeadlines.length,
-      expiringPreservations: expiringPreservations.length,
+      // Real totals (not capped by the 50-row preview lists).
+      upcomingDeadlines: Number(dlCount),
+      expiringPreservations: Number(presCount),
     },
     upcomingDeadlines,
     expiringPreservations,
