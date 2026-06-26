@@ -93,6 +93,11 @@ import {
   verifyToken,
   uploadDocument,
   getDocumentForDownload,
+  createTemplate,
+  listTemplates,
+  deleteTemplate,
+  previewTemplate,
+  generateFromTemplate,
   createFsStorage,
   type AuthContext,
   type Deps,
@@ -789,6 +794,55 @@ notify
   .command("read-all")
   .option("--token <token>")
   .action((opts) => run(async () => markAllNotificationsRead(buildDeps(), await resolveAuth(opts.token))));
+
+// ── template (文书模板) ────────────────────────────────────────────────────────
+const template = program.command("template").description("文书模板");
+template
+  .command("upload")
+  .description("上传 .docx 模板（自动识别变量）")
+  .requiredOption("--file <path>", "本地 .docx 路径")
+  .requiredOption("--name <name>")
+  .requiredOption("--category <c>", "INTAKE|RETAINER|LITIGATION|HEARING|WORK_PRODUCT|ARCHIVE|CLOSING|BLANK")
+  .option("--description <d>")
+  .option("--applicable <c...>", "适用案件类别（缺省=全部）", [])
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      const bytes = new Uint8Array(await readFile(opts.file));
+      return createTemplate(
+        buildDeps(),
+        await resolveAuth(opts.token),
+        { name: opts.name, category: opts.category, description: opts.description, applicableCategories: opts.applicable.length ? opts.applicable : undefined },
+        bytes,
+      );
+    }),
+  );
+template
+  .command("list")
+  .option("--matter-category <c>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listTemplates(buildDeps(), await resolveAuth(opts.token), { matterCategory: opts.matterCategory })));
+template
+  .command("preview")
+  .description("查看模板变量与本案缺失项")
+  .requiredOption("--template-id <id>")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => previewTemplate(buildDeps(), await resolveAuth(opts.token), { templateId: opts.templateId, matterId: opts.matterId })));
+template
+  .command("generate")
+  .description("套用模板生成文书（入卷）")
+  .requiredOption("--template-id <id>")
+  .requiredOption("--matter-id <id>")
+  .option("--folder-id <id>")
+  .option("--name <name>")
+  .option("--token <token>")
+  .action((opts) => run(async () => generateFromTemplate(buildDeps(), await resolveAuth(opts.token), { templateId: opts.templateId, matterId: opts.matterId, folderId: opts.folderId, name: opts.name })));
+template
+  .command("delete")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => deleteTemplate(buildDeps(), await resolveAuth(opts.token), { templateId: opts.id })));
 
 // ── invoice (开票) ─────────────────────────────────────────────────────────────
 const invoice = program.command("invoice").description("开票工作流");

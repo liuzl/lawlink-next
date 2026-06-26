@@ -13,6 +13,7 @@ import {
   type NoteRow,
   type PreservationRow,
   type TaskRow,
+  type TemplateRow,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -193,6 +194,8 @@ export function MatterDetail() {
   const [docCategory, setDocCategory] = useState("OTHER");
   const [docFolderId, setDocFolderId] = useState("");
   const [folderName, setFolderName] = useState("");
+  const [templates, setTemplates] = useState<TemplateRow[]>([]);
+  const [genTemplateId, setGenTemplateId] = useState("");
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
   const isManagement = role === "ADMIN" || role === "PRINCIPAL_LAWYER";
@@ -276,6 +279,11 @@ export function MatterDetail() {
       active = false;
     };
   }, [id]);
+
+  // Load templates applicable to this matter's category for the 套用模板 control.
+  useEffect(() => {
+    if (matter) api.listTemplates(matter.category).then(setTemplates).catch(() => {});
+  }, [matter?.category]);
 
   async function refresh() {
     try {
@@ -483,6 +491,25 @@ export function MatterDetail() {
       setDocCategory("OTHER");
       setDocFolderId("");
       await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function genFromTemplate() {
+    if (!genTemplateId) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api.generateFromTemplate(genTemplateId, {
+        matterId: id,
+        folderId: docFolderId || undefined,
+      });
+      await refresh();
+      setGenTemplateId("");
+      await api.downloadDocument(res.documentId, res.name);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -1250,6 +1277,28 @@ export function MatterDetail() {
                   添加卷宗
                 </Button>
               </form>
+              {templates.length > 0 && (
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="space-y-1.5">
+                    <Label>套用模板</Label>
+                    <Select value={genTemplateId} onValueChange={setGenTemplateId}>
+                      <SelectTrigger className="w-52">
+                        <SelectValue placeholder="选择模板" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {templates.map((t) => (
+                          <SelectItem key={t.id} value={t.id}>
+                            {t.name}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <Button type="button" onClick={genFromTemplate} disabled={busy || !genTemplateId}>
+                    {busy ? "生成中…" : "生成"}
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </CardContent>

@@ -225,6 +225,20 @@ export interface SmsRow {
   processed: boolean;
   parsed: ParsedSms | null;
 }
+export interface TemplateRow {
+  id: string;
+  name: string;
+  category: string;
+  description: string | null;
+  applicableCategories: string[];
+  variables: string[];
+  isBuiltIn: boolean;
+}
+export interface TemplatePreview {
+  templateName: string;
+  variables: string[];
+  missing: string[];
+}
 export interface InvoiceRow {
   id: string;
   matterId: string | null;
@@ -566,6 +580,33 @@ export const api = {
   },
   getFinanceOverview: (months?: number) =>
     req<FinanceOverview>(`/finance/overview${months ? `?months=${months}` : ""}`),
+  listTemplates: (matterCategory?: string) =>
+    req<TemplateRow[]>(`/templates${matterCategory ? `?matterCategory=${encodeURIComponent(matterCategory)}` : ""}`),
+  uploadTemplate: async (
+    file: File,
+    meta: { name: string; category: string; description?: string; applicableCategories?: string[] },
+  ): Promise<{ id: string; variables: string[] }> => {
+    const token = getToken();
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("name", meta.name);
+    fd.append("category", meta.category);
+    if (meta.description) fd.append("description", meta.description);
+    if (meta.applicableCategories) fd.append("applicableCategories", JSON.stringify(meta.applicableCategories));
+    const res = await fetch("/api/templates/upload", {
+      method: "POST",
+      headers: token ? { authorization: `Bearer ${token}` } : {},
+      body: fd,
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    return data as { id: string; variables: string[] };
+  },
+  deleteTemplate: (id: string) => req<{ deleted: boolean }>(`/templates/${id}/delete`, { method: "POST" }),
+  previewTemplate: (id: string, matterId: string) =>
+    req<TemplatePreview>(`/templates/${id}/preview?matterId=${encodeURIComponent(matterId)}`),
+  generateFromTemplate: (id: string, body: Record<string, unknown>) =>
+    req<{ documentId: string; name: string }>(`/templates/${id}/generate`, { method: "POST", body: JSON.stringify(body) }),
   listInvoices: (status?: string) =>
     req<InvoiceRow[]>(`/invoices${status ? `?status=${encodeURIComponent(status)}` : ""}`),
   createInvoice: (body: Record<string, unknown>) =>

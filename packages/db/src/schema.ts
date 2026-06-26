@@ -392,6 +392,9 @@ export const documents = sqliteTable(
     version: integer("version").notNull().default(1),
     isLatest: integer("is_latest", { mode: "boolean" }).notNull().default(true),
     familyId: text("family_id"),
+    // Provenance for template-generated documents (文书模板, §5.5).
+    templateId: text("template_id"),
+    templateContextJson: text("template_context_json"),
     // Blob metadata (opaque pointer + integrity fields; bytes stored elsewhere).
     storageKey: text("storage_key"),
     mimeType: text("mime_type"),
@@ -466,6 +469,29 @@ export const smsMessages = sqliteTable(
     index("SmsMessage_matter_idx").on(t.matchedMatterId),
     index("SmsMessage_type_idx").on(t.smsType, t.receivedAt),
   ],
+);
+
+/** Document template (文书模板, DOMAIN-SPEC §5.5). The source .docx bytes live in
+ * storage (docxStorageKey); variablesJson is the detected {placeholder} set;
+ * applicableCategoriesJson scopes which matter categories may use it (empty = all). */
+export const documentTemplates = sqliteTable(
+  "DocumentTemplate",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    // INTAKE | RETAINER | LITIGATION | HEARING | WORK_PRODUCT | ARCHIVE | CLOSING | BLANK
+    category: text("category").notNull(),
+    description: text("description"),
+    applicableCategoriesJson: text("applicable_categories_json").notNull().default("[]"),
+    docxStorageKey: text("docx_storage_key").notNull(),
+    variablesJson: text("variables_json").notNull().default("[]"),
+    isBuiltIn: integer("is_built_in", { mode: "boolean" }).notNull().default(false),
+    enabled: integer("enabled", { mode: "boolean" }).notNull().default(true),
+    createdById: text("created_by_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("DocumentTemplate_category_idx").on(t.category, t.enabled)],
 );
 
 /** Invoice request (开票工作流, DOMAIN-SPEC §5.4).

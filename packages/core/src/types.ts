@@ -111,6 +111,17 @@ export type InvoiceRequestStatus = "PENDING" | "APPROVED" | "ISSUED" | "REJECTED
 export type InvoiceType = "PLAIN" | "SPECIAL";
 export type InvoiceItem = "LAWYER_FEE" | "CONSULTING_FEE" | "AGENCY_FEE" | "OTHER";
 
+/** Document-template category (文书模板, DOMAIN-SPEC §5.5). */
+export type TemplateCategory =
+  | "INTAKE"
+  | "RETAINER"
+  | "LITIGATION"
+  | "HEARING"
+  | "WORK_PRODUCT"
+  | "ARCHIVE"
+  | "CLOSING"
+  | "BLANK";
+
 /** The authenticated caller. Assembled by each entry shell (API/CLI) from a
  * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {

@@ -96,6 +96,11 @@ import {
   verifyToken,
   uploadDocument,
   getDocumentForDownload,
+  createTemplate,
+  listTemplates,
+  deleteTemplate,
+  previewTemplate,
+  generateFromTemplate,
   createFsStorage,
   DomainError,
   type AuthContext,
@@ -657,6 +662,56 @@ app.post("/api/notifications/:id/read", requireAuth, async (c) => {
 app.get("/api/schedule", requireAuth, async (c) => {
   try {
     return c.json(await getSchedule(buildDeps(), c.get("auth"), { from: c.req.query("from"), to: c.req.query("to") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── templates (文书模板) ───────────────────────────────────────────────────────
+const templateBodyLimit = bodyLimit({ maxSize: 21 * 1024 * 1024, onError: (c) => c.json({ error: "模板超过 20MB 上限" }, 413) });
+app.get("/api/templates", requireAuth, async (c) => {
+  try {
+    return c.json(await listTemplates(buildDeps(), c.get("auth"), { matterCategory: c.req.query("matterCategory") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/templates/upload", requireAuth, templateBodyLimit, async (c) => {
+  try {
+    const form = await c.req.formData();
+    const file = form.get("file");
+    if (!(file instanceof File)) throw new DomainError("VALIDATION", "缺少模板文件");
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    const applicableRaw = form.get("applicableCategories");
+    const meta = {
+      name: (form.get("name") as string) || file.name,
+      category: form.get("category") as string,
+      description: (form.get("description") as string) || undefined,
+      applicableCategories: applicableRaw ? (JSON.parse(applicableRaw as string) as string[]) : undefined,
+    };
+    return c.json(await createTemplate(buildDeps("", auditCtx(c)), c.get("auth"), meta, bytes), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/templates/:id/preview", requireAuth, async (c) => {
+  try {
+    return c.json(await previewTemplate(buildDeps(), c.get("auth"), { templateId: c.req.param("id"), matterId: c.req.query("matterId") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/templates/:id/generate", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await generateFromTemplate(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, templateId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/templates/:id/delete", requireAuth, async (c) => {
+  try {
+    return c.json(await deleteTemplate(buildDeps("", auditCtx(c)), c.get("auth"), { templateId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

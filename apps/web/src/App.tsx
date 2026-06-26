@@ -17,6 +17,7 @@ import { Finance } from "@/pages/Finance";
 import { Schedule } from "@/pages/Schedule";
 import { Notifications } from "@/pages/Notifications";
 import { Settings } from "@/pages/Settings";
+import { Templates } from "@/pages/Templates";
 
 /** 认证门卫：无 token 跳登录，否则渲染外壳布局 */
 function RequireAuth() {
@@ -43,6 +44,7 @@ export function App() {
         <Route path="/schedule" element={<Schedule />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/templates" element={<Templates />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
