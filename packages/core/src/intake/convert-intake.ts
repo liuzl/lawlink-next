@@ -77,21 +77,10 @@ export async function convertIntake(
       createdAt: now,
     });
 
-    // 4. Carry the intake's parties over to the Matter (conflict-check corpus).
-    const intakeParties = await tx.select().from(parties).where(eq(parties.intakeId, intakeId));
-    if (intakeParties.length > 0) {
-      await tx.insert(parties).values(
-        intakeParties.map((p) => ({
-          id: deps.ids.newId(),
-          intakeId: null,
-          matterId,
-          role: p.role,
-          name: p.name,
-          idNumber: p.idNumber,
-          createdAt: now,
-        })),
-      );
-    }
+    // 4. Attach the Matter to the intake's existing party rows IN PLACE — do not
+    //    copy. Copying would leave duplicate rows in the conflict corpus and
+    //    inflate future hit counts. intakeId is kept for provenance.
+    await tx.update(parties).set({ matterId }).where(eq(parties.intakeId, intakeId));
 
     return { matterId, internalCode, intakeId, status: "CONVERTED" as const };
   });

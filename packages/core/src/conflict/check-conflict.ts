@@ -43,6 +43,8 @@ export const ConflictQueryInput = z
     candidateRole: z
       .enum(["CLIENT_PARTY", "OPPOSING_PARTY", "THIRD_PARTY"])
       .default("OPPOSING_PARTY"),
+    /** Optional link to the intake this check is for (audit trail). */
+    intakeId: z.string().min(1).optional(),
   })
   .refine((v) => v.name || v.idNumber, "需至少提供 name 或 idNumber");
 
@@ -100,7 +102,7 @@ export async function runConflictCheck(
 
   await deps.db.insert(conflictChecks).values({
     id: deps.ids.newId(),
-    intakeId: null,
+    intakeId: input.intakeId ?? null,
     queryName: input.name ?? null,
     queryIdNumber: input.idNumber ?? null,
     candidateRole: candidate,

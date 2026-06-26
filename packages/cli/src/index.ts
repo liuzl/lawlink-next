@@ -191,6 +191,7 @@ program
   .option("--name <name>", "当事人名称")
   .option("--id-number <id>", "证件号")
   .option("--candidate-role <role>", "本次角色 CLIENT_PARTY|OPPOSING_PARTY|THIRD_PARTY", "OPPOSING_PARTY")
+  .option("--intake-id <id>", "关联收案（审计）")
   .option("--token <token>", "登录态")
   .action((opts) =>
     run(async () =>
@@ -198,6 +199,7 @@ program
         name: opts.name,
         idNumber: opts.idNumber,
         candidateRole: opts.candidateRole,
+        intakeId: opts.intakeId,
       }),
     ),
   );
