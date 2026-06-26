@@ -42,6 +42,22 @@ export type IntakeStatus =
   | "CONVERTED"
   | "DECLINED";
 
+/** Document material category (DOMAIN-SPEC §4.x). */
+export type DocumentCategory =
+  | "EVIDENCE"
+  | "PLEADING"
+  | "PROCEDURE"
+  | "JUDGMENT"
+  | "CONTRACT"
+  | "OTHER";
+
+/** Document review lifecycle (DOMAIN-SPEC §5.5). */
+export type DocumentStatus =
+  | "DRAFT"
+  | "PENDING_REVIEW"
+  | "APPROVED"
+  | "FILED";
+
 /** The authenticated caller. Assembled by each entry shell (API/CLI) from a
  * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {

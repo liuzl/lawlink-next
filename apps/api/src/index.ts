@@ -31,6 +31,18 @@ import {
   createFeeEntry,
   createIntake,
   createPreservation,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  listFolders,
+  registerDocument,
+  listDocuments,
+  moveDocument,
+  submitDocumentForReview,
+  approveDocument,
+  rejectDocument,
+  fileDocument,
+  deleteDocument,
   declineIntake,
   deleteFeeEntry,
   getMatterFinance,
@@ -419,6 +431,99 @@ app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
 app.post("/api/preservations/:id/lift", requireAuth, async (c) => {
   try {
     return c.json(await liftPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { preservationId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── folders (卷宗) ────────────────────────────────────────────────────────────
+app.get("/api/matters/:id/folders", requireAuth, async (c) => {
+  try {
+    return c.json(await listFolders(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/folders", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await createFolder(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/folders/:id/rename", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await renameFolder(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, folderId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/folders/:id/delete", requireAuth, async (c) => {
+  try {
+    return c.json(await deleteFolder(buildDeps("", auditCtx(c)), c.get("auth"), { folderId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── documents (材料/文书) ──────────────────────────────────────────────────────
+app.get("/api/matters/:id/documents", requireAuth, async (c) => {
+  try {
+    return c.json(await listDocuments(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/documents", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await registerDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/move", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await moveDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/submit", requireAuth, async (c) => {
+  try {
+    return c.json(await submitDocumentForReview(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/approve", requireAuth, async (c) => {
+  try {
+    return c.json(await approveDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/reject", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await rejectDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/file", requireAuth, async (c) => {
+  try {
+    return c.json(await fileDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/documents/:id/delete", requireAuth, async (c) => {
+  try {
+    return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

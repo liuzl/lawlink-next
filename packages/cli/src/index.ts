@@ -30,6 +30,18 @@ import {
   createFeeEntry,
   createIntake,
   createPreservation,
+  createFolder,
+  renameFolder,
+  deleteFolder,
+  listFolders,
+  registerDocument,
+  listDocuments,
+  moveDocument,
+  submitDocumentForReview,
+  approveDocument,
+  rejectDocument,
+  fileDocument,
+  deleteDocument,
   declineIntake,
   deleteFeeEntry,
   getClient,
@@ -569,5 +581,93 @@ preservation
   .command("scan")
   .description("系统任务：标记已过期保全（cron 入口，DOMAIN-SPEC §9.2）")
   .action(() => run(async () => scanPreservationExpiry(buildDeps())));
+
+// ── folder (卷宗) ─────────────────────────────────────────────────────────────
+const folder = program.command("folder").description("卷宗");
+folder
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listFolders(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
+folder
+  .command("create")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--name <name>")
+  .option("--token <token>")
+  .action((opts) => run(async () => createFolder(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, name: opts.name })));
+folder
+  .command("rename")
+  .requiredOption("--folder-id <id>")
+  .requiredOption("--name <name>")
+  .option("--token <token>")
+  .action((opts) => run(async () => renameFolder(buildDeps(), await resolveAuth(opts.token), { folderId: opts.folderId, name: opts.name })));
+folder
+  .command("delete")
+  .requiredOption("--folder-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => deleteFolder(buildDeps(), await resolveAuth(opts.token), { folderId: opts.folderId })));
+
+// ── document (材料/文书) ───────────────────────────────────────────────────────
+const document = program.command("document").description("材料 / 文书");
+document
+  .command("register")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--name <name>")
+  .option("--category <c>", "EVIDENCE|PLEADING|PROCEDURE|JUDGMENT|CONTRACT|OTHER", "OTHER")
+  .option("--folder-id <id>")
+  .option("--source-party <p>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      registerDocument(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        name: opts.name,
+        category: opts.category,
+        folderId: opts.folderId,
+        sourceParty: opts.sourceParty,
+      }),
+    ),
+  );
+document
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listDocuments(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
+document
+  .command("move")
+  .requiredOption("--document-id <id>")
+  .option("--folder-id <id>", "目标卷宗（省略=移出至案件根）")
+  .option("--token <token>")
+  .action((opts) => run(async () => moveDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId, folderId: opts.folderId ?? null })));
+document
+  .command("submit")
+  .description("提交审核 DRAFT → PENDING_REVIEW")
+  .requiredOption("--document-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => submitDocumentForReview(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId })));
+document
+  .command("approve")
+  .description("通过审核 PENDING_REVIEW → APPROVED（管理角色）")
+  .requiredOption("--document-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => approveDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId })));
+document
+  .command("reject")
+  .description("退回 PENDING_REVIEW → DRAFT（管理角色）")
+  .requiredOption("--document-id <id>")
+  .option("--reason <r>")
+  .option("--token <token>")
+  .action((opts) => run(async () => rejectDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId, reason: opts.reason })));
+document
+  .command("file")
+  .description("入卷归档 APPROVED → FILED")
+  .requiredOption("--document-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => fileDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId })));
+document
+  .command("delete")
+  .requiredOption("--document-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => deleteDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId })));
 
 program.parseAsync(process.argv);

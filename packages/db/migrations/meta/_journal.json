@@ -85,6 +85,13 @@
       "when": 1782469500000,
       "tag": "0011_append_only_audit",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1782471061451,
+      "tag": "0012_cute_darkstar",
+      "breakpoints": true
     }
   ]
 }

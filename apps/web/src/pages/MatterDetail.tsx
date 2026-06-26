@@ -1,11 +1,13 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { Archive, Banknote, CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
+import { Archive, Banknote, CalendarClock, Check, ChevronLeft, FolderClosed, Gavel, ListChecks, MessageSquare, Snowflake, Trash2 } from "lucide-react";
 import {
   api,
   getRole,
   type DeadlineRow,
+  type DocumentRow,
   type FinanceData,
+  type FolderRow,
   type HearingRow,
   type MatterDetail as MatterDetailData,
   type NoteRow,
@@ -117,6 +119,20 @@ const NOTE_CHANNEL_CN: Record<string, string> = {
   COURT: "法院",
   OTHER: "其他",
 };
+const DOC_CAT_CN: Record<string, string> = {
+  EVIDENCE: "证据",
+  PLEADING: "诉讼文书",
+  PROCEDURE: "程序材料",
+  JUDGMENT: "裁判文书",
+  CONTRACT: "合同",
+  OTHER: "其他",
+};
+const DOC_STATUS_CN: Record<string, string> = {
+  DRAFT: "草稿",
+  PENDING_REVIEW: "待审核",
+  APPROVED: "已通过",
+  FILED: "已入卷",
+};
 
 function dueDays(dueAt: string): number {
   const [y, m, d] = dueAt.slice(0, 10).split("-").map(Number);
@@ -171,8 +187,15 @@ export function MatterDetail() {
   const [archiveForceReason, setArchiveForceReason] = useState("");
   const [archiveError, setArchiveError] = useState<string | null>(null);
   const [archiveLoadError, setArchiveLoadError] = useState<string | null>(null);
+  const [folders, setFolders] = useState<FolderRow[]>([]);
+  const [documents, setDocuments] = useState<DocumentRow[]>([]);
+  const [docName, setDocName] = useState("");
+  const [docCategory, setDocCategory] = useState("OTHER");
+  const [docFolderId, setDocFolderId] = useState("");
+  const [folderName, setFolderName] = useState("");
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
+  const isManagement = role === "ADMIN" || role === "PRINCIPAL_LAWYER";
   // Archived matters are read-only for case-body edits (§6.6) — finance stays
   // editable, so finance controls keep using canEdit.
   const canModifyMatter = canEdit && matter?.status !== "ARCHIVED";
@@ -229,6 +252,14 @@ export function MatterDetail() {
     api.listHearings(id).then((h) => {
       if (active) setHearings(h);
     }).catch(() => {});
+    setFolders([]);
+    setDocuments([]);
+    api.listFolders(id).then((f) => {
+      if (active) setFolders(f);
+    }).catch(() => {});
+    api.listDocuments(id).then((d) => {
+      if (active) setDocuments(d);
+    }).catch(() => {});
     setFinance(null);
     api.getFinance(id).then((f) => {
       if (active) setFinance(f);
@@ -274,6 +305,12 @@ export function MatterDetail() {
     } catch { /* ignore */ }
     try {
       setHearings(await api.listHearings(id));
+    } catch { /* ignore */ }
+    try {
+      setFolders(await api.listFolders(id));
+    } catch { /* ignore */ }
+    try {
+      setDocuments(await api.listDocuments(id));
     } catch { /* ignore */ }
     try {
       setFinance(await api.getFinance(id));
@@ -409,6 +446,55 @@ export function MatterDetail() {
     setError(null);
     try {
       await api.deleteFeeEntry(feeId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function addFolder(e: FormEvent) {
+    e.preventDefault();
+    if (!folderName) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.createFolder(id, folderName);
+      setFolderName("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerDoc(e: FormEvent) {
+    e.preventDefault();
+    if (!docName) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.registerDocument(id, {
+        name: docName,
+        category: docCategory,
+        folderId: docFolderId || undefined,
+      });
+      setDocName("");
+      setDocCategory("OTHER");
+      setDocFolderId("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Run a document lifecycle action then refresh; surface its error inline. */
+  async function docAction(fn: () => Promise<unknown>) {
+    setError(null);
+    try {
+      await fn();
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -980,6 +1066,149 @@ export function MatterDetail() {
                 {busy ? "添加中…" : "添加开庭"}
               </Button>
             </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <FolderClosed className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            卷宗 / 材料
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {/* Group documents by folder; a trailing "未归卷" group holds unfiled docs. */}
+          {[...folders, { id: "", name: "未归卷", isDefault: false } as FolderRow].map((f) => {
+            const docs = documents.filter((d) => (d.folderId ?? "") === f.id);
+            if (f.id === "" && docs.length === 0) return null;
+            return (
+              <div key={f.id || "__loose"} className="rounded-sm border border-border">
+                <div className="flex items-center justify-between border-b border-border bg-muted/40 px-3 py-1.5">
+                  <span className="flex items-center gap-1.5 text-xs font-medium">
+                    {f.name}
+                    {f.isDefault && <Badge variant="secondary" className="text-[10px]">预置</Badge>}
+                    <span className="text-muted-foreground">({docs.length})</span>
+                  </span>
+                  {canModifyMatter && f.id !== "" && !f.isDefault && docs.length === 0 && (
+                    <Button variant="ghost" size="sm" onClick={() => docAction(() => api.deleteFolder(f.id))}>
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  )}
+                </div>
+                <div className="divide-y divide-border">
+                  {docs.map((d) => (
+                    <div key={d.id} className="flex flex-wrap items-center justify-between gap-2 px-3 py-2">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-sm">{d.name}</span>
+                        <Badge variant="secondary" className="text-[10px]">{DOC_CAT_CN[d.category] ?? d.category}</Badge>
+                        <Badge variant="outline" className="text-[10px]">{DOC_STATUS_CN[d.status] ?? d.status}</Badge>
+                      </div>
+                      {canModifyMatter && (
+                        <div className="flex items-center gap-1">
+                          {d.status === "DRAFT" && (
+                            <Button variant="ghost" size="sm" onClick={() => docAction(() => api.submitDocument(d.id))}>
+                              提交审核
+                            </Button>
+                          )}
+                          {d.status === "PENDING_REVIEW" && isManagement && (
+                            <>
+                              <Button variant="ghost" size="sm" onClick={() => docAction(() => api.approveDocument(d.id))}>
+                                通过
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={() => docAction(() => api.rejectDocument(d.id))}>
+                                退回
+                              </Button>
+                            </>
+                          )}
+                          {d.status === "APPROVED" && (
+                            <Button variant="ghost" size="sm" onClick={() => docAction(() => api.fileDocument(d.id))}>
+                              入卷
+                            </Button>
+                          )}
+                          <Select
+                            value={d.folderId ?? "__root__"}
+                            onValueChange={(v) => docAction(() => api.moveDocument(d.id, v === "__root__" ? null : v))}
+                          >
+                            <SelectTrigger className="h-7 w-24 text-xs">
+                              <SelectValue placeholder="移动" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="__root__">未归卷</SelectItem>
+                              {folders.map((fo) => (
+                                <SelectItem key={fo.id} value={fo.id}>
+                                  {fo.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <Button variant="ghost" size="sm" onClick={() => docAction(() => api.deleteDocument(d.id))}>
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  {docs.length === 0 && <p className="px-3 py-2 text-xs text-muted-foreground">（空）</p>}
+                </div>
+              </div>
+            );
+          })}
+          {folders.length === 0 && documents.length === 0 && (
+            <p className="py-2 text-xs text-muted-foreground">尚无卷宗或材料</p>
+          )}
+
+          {canModifyMatter && (
+            <div className="space-y-3 pt-1">
+              <form onSubmit={registerDoc} className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label>材料名称</Label>
+                  <Input value={docName} onChange={(e) => setDocName(e.target.value)} placeholder="如 借款合同.pdf" className="w-52" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>分类</Label>
+                  <Select value={docCategory} onValueChange={setDocCategory}>
+                    <SelectTrigger className="w-28">
+                      <SelectValue placeholder="选择" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {Object.entries(DOC_CAT_CN).map(([v, l]) => (
+                        <SelectItem key={v} value={v}>
+                          {l}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>卷宗（可选）</Label>
+                  <Select value={docFolderId} onValueChange={setDocFolderId}>
+                    <SelectTrigger className="w-32">
+                      <SelectValue placeholder="未归卷" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {folders.map((f) => (
+                        <SelectItem key={f.id} value={f.id}>
+                          {f.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <Button type="submit" disabled={busy || !docName}>
+                  {busy ? "登记中…" : "登记材料"}
+                </Button>
+              </form>
+              <form onSubmit={addFolder} className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1.5">
+                  <Label>新建卷宗</Label>
+                  <Input value={folderName} onChange={(e) => setFolderName(e.target.value)} placeholder="卷宗名称" className="w-52" />
+                </div>
+                <Button type="submit" variant="outline" disabled={busy || !folderName}>
+                  添加卷宗
+                </Button>
+              </form>
+            </div>
           )}
         </CardContent>
       </Card>

@@ -337,6 +337,70 @@ export const archiveRecords = sqliteTable(
   (t) => [uniqueIndex("ArchiveRecord_matter_uq").on(t.matterId)],
 );
 
+/** Document folder (卷宗) — per-matter physical filing directory (DOMAIN-SPEC §7.2).
+ * Defaults are seeded by category at matter creation; renamable but defaults
+ * are not deletable. unique(matterId, name) prevents duplicate folders. */
+export const documentFolders = sqliteTable(
+  "DocumentFolder",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    name: text("name").notNull(),
+    orderIndex: integer("order_index").notNull().default(0),
+    isDefault: integer("is_default", { mode: "boolean" }).notNull().default(false),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    uniqueIndex("DocumentFolder_matter_name_uq").on(t.matterId, t.name),
+    index("DocumentFolder_matter_idx").on(t.matterId, t.orderIndex),
+  ],
+);
+
+/** Document (材料/文书) — case material metadata + review lifecycle (DOMAIN-SPEC §4.x, §5.5).
+ * Binary bytes live in an external blob store (R2/D1 infra, later); `storageKey`
+ * is an opaque pointer the upload adapter fills. Soft-deleted via deletedAt. */
+export const documents = sqliteTable(
+  "Document",
+  {
+    id: text("id").primaryKey(),
+    // Attachable to a matter, an intake (pre-conversion), and/or a procedure.
+    matterId: text("matter_id"),
+    intakeId: text("intake_id"),
+    procedureId: text("procedure_id"),
+    folderId: text("folder_id"),
+    name: text("name").notNull(),
+    // EVIDENCE | PLEADING | PROCEDURE | JUDGMENT | CONTRACT | OTHER
+    category: text("category").notNull().default("OTHER"),
+    sourceParty: text("source_party"),
+    // DRAFT | PENDING_REVIEW | APPROVED | FILED
+    status: text("status").notNull().default("DRAFT"),
+    reviewedById: text("reviewed_by_id"),
+    reviewedAt: integer("reviewed_at", { mode: "timestamp" }),
+    approvedById: text("approved_by_id"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    version: integer("version").notNull().default(1),
+    isLatest: integer("is_latest", { mode: "boolean" }).notNull().default(true),
+    familyId: text("family_id"),
+    // Blob metadata (opaque pointer + integrity fields; bytes stored elsewhere).
+    storageKey: text("storage_key"),
+    mimeType: text("mime_type"),
+    size: integer("size"),
+    sha256: text("sha256"),
+    tagsJson: text("tags_json").notNull().default("[]"),
+    uploadedById: text("uploaded_by_id").notNull(),
+    deletedAt: integer("deleted_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("Document_matter_idx").on(t.matterId, t.category),
+    index("Document_intake_idx").on(t.intakeId),
+    index("Document_folder_idx").on(t.folderId),
+    index("Document_family_idx").on(t.familyId),
+  ],
+);
+
 /** Audit log (审计, DOMAIN-SPEC §4.12, §7) — append-only; not business-deletable. */
 export const auditLogs = sqliteTable(
   "AuditLog",

@@ -14,3 +14,4 @@ export * from "./finance/index.js";
 export * from "./matter/guards.js";
 export * from "./archive/index.js";
 export * from "./audit/index.js";
+export * from "./document/index.js";

@@ -152,6 +152,26 @@ export interface AuditRow {
   ip: string | null;
   createdAt: string;
 }
+export interface FolderRow {
+  id: string;
+  matterId: string;
+  name: string;
+  orderIndex: number;
+  isDefault: boolean;
+}
+export interface DocumentRow {
+  id: string;
+  matterId: string | null;
+  folderId: string | null;
+  name: string;
+  category: string;
+  sourceParty: string | null;
+  status: string;
+  version: number;
+  tags: string[];
+  uploadedById: string;
+  createdAt: string;
+}
 export interface ClientRow {
   id: string;
   name: string;
@@ -293,6 +313,23 @@ export const api = {
     }),
   getAudit: (action?: string) =>
     req<AuditRow[]>(`/audit${action ? `?action=${encodeURIComponent(action)}` : ""}`),
+  listFolders: (matterId: string) => req<FolderRow[]>(`/matters/${matterId}/folders`),
+  createFolder: (matterId: string, name: string) =>
+    req<{ id: string }>(`/matters/${matterId}/folders`, { method: "POST", body: JSON.stringify({ name }) }),
+  renameFolder: (id: string, name: string) =>
+    req<{ id: string }>(`/folders/${id}/rename`, { method: "POST", body: JSON.stringify({ name }) }),
+  deleteFolder: (id: string) => req<{ deleted: boolean }>(`/folders/${id}/delete`, { method: "POST" }),
+  listDocuments: (matterId: string) => req<DocumentRow[]>(`/matters/${matterId}/documents`),
+  registerDocument: (matterId: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/matters/${matterId}/documents`, { method: "POST", body: JSON.stringify(body) }),
+  moveDocument: (id: string, folderId: string | null) =>
+    req<{ id: string }>(`/documents/${id}/move`, { method: "POST", body: JSON.stringify({ folderId }) }),
+  submitDocument: (id: string) => req<{ status: string }>(`/documents/${id}/submit`, { method: "POST" }),
+  approveDocument: (id: string) => req<{ status: string }>(`/documents/${id}/approve`, { method: "POST" }),
+  rejectDocument: (id: string, reason?: string) =>
+    req<{ status: string }>(`/documents/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
+  fileDocument: (id: string) => req<{ status: string }>(`/documents/${id}/file`, { method: "POST" }),
+  deleteDocument: (id: string) => req<{ deleted: boolean }>(`/documents/${id}/delete`, { method: "POST" }),
   getArchiveChecklist: (matterId: string) =>
     req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
   archiveMatter: (matterId: string, body: Record<string, unknown>) =>

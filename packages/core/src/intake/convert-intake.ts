@@ -12,6 +12,7 @@ import { counters, intakes, matters, parties } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { INTERNAL_CODE_PREFIX, counterKey, formatInternalCode } from "../matter/internal-code.js";
+import { seedDefaultFolders } from "../document/folders.js";
 
 const TERMINAL = ["CONVERTED", "DECLINED"] as const;
 
@@ -81,6 +82,10 @@ export async function convertIntake(
     //    copy. Copying would leave duplicate rows in the conflict corpus and
     //    inflate future hit counts. intakeId is kept for provenance.
     await tx.update(parties).set({ matterId }).where(eq(parties.intakeId, intakeId));
+
+    // 5. Seed the default 卷宗 structure for the category (DOMAIN-SPEC §7.2),
+    //    in the same transaction so a converted matter always has its folders.
+    await seedDefaultFolders(deps, matterId, intake.category as MatterCategory, tx);
 
     return { matterId, internalCode, intakeId, status: "CONVERTED" as const };
   });
