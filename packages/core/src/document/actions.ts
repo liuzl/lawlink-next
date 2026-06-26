@@ -65,6 +65,10 @@ interface StorageMeta {
   mimeType?: string;
   size: number;
   sha256: string;
+  /** Template provenance, set atomically in the same insert when the document is
+   * produced by generateFromTemplate (avoids an orphan if a later UPDATE fails). */
+  templateId?: string;
+  templateContextJson?: string;
 }
 
 /** Register a document's metadata against a matter (status starts DRAFT). The
@@ -117,6 +121,8 @@ export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: 
       mimeType: storage?.mimeType ?? null,
       size: storage?.size ?? null,
       sha256: storage?.sha256 ?? null,
+      templateId: storage?.templateId ?? null,
+      templateContextJson: storage?.templateContextJson ?? null,
       tagsJson: JSON.stringify(input.tags ?? []),
       uploadedById: auth.userId,
       deletedAt: null,
@@ -151,6 +157,7 @@ export async function uploadDocument(
   auth: AuthContext,
   rawInput: unknown,
   bytes: Uint8Array,
+  provenance?: { templateId: string; templateContextJson: string },
 ) {
   const input = UploadDocumentInput.parse(rawInput);
   if (bytes.length === 0) throw new DomainError("VALIDATION", "文件内容为空");
@@ -170,7 +177,14 @@ export async function uploadDocument(
         sourceParty: input.sourceParty,
         tags: input.tags,
       },
-      { storageKey, mimeType: input.mimeType, size: bytes.length, sha256 },
+      {
+        storageKey,
+        mimeType: input.mimeType,
+        size: bytes.length,
+        sha256,
+        templateId: provenance?.templateId,
+        templateContextJson: provenance?.templateContextJson,
+      },
     );
   } catch (err) {
     // Registration rejected (e.g. archived matter / bad folder) — drop the blob.

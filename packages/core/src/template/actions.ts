@@ -11,7 +11,7 @@ import { z } from "zod";
 import { and, asc, eq } from "drizzle-orm";
 import PizZip from "pizzip";
 import Docxtemplater from "docxtemplater";
-import { documentTemplates, documents, matterProcedures, matters, parties, users } from "@lawlink/db";
+import { documentTemplates, matterProcedures, matters, parties, users } from "@lawlink/db";
 import {
   DomainError,
   type AuthContext,
@@ -41,6 +41,30 @@ function dottedParser(tag: string) {
   };
 }
 
+// Zip-bomb guards: a small .docx can declare/expand to huge uncompressed XML.
+// We inspect the central-directory sizes (no decompression) before docxtemplater
+// parses, and cap entry count, total uncompressed size, and compression ratio.
+const MAX_ARCHIVE_ENTRIES = 512;
+const MAX_TOTAL_UNCOMPRESSED = 100 * 1024 * 1024; // 100MB expanded
+const MAX_COMPRESSION_RATIO = 200; // declared-uncompressed / on-disk bytes
+
+/** Reject archives whose declared expansion exceeds conservative limits. Reads
+ * the per-entry uncompressedSize PizZip records from the zip headers — no entry
+ * is decompressed here, so a zip bomb is caught before it can be expanded. */
+function assertSafeArchive(zip: PizZip, compressedLen: number): void {
+  const names = Object.keys(zip.files);
+  if (names.length > MAX_ARCHIVE_ENTRIES) throw new DomainError("VALIDATION", "docx 内部文件过多");
+  let total = 0;
+  for (const name of names) {
+    const data = (zip.files[name] as unknown as { _data?: { uncompressedSize?: number } })._data;
+    total += typeof data?.uncompressedSize === "number" ? data.uncompressedSize : 0;
+  }
+  if (total > MAX_TOTAL_UNCOMPRESSED) throw new DomainError("VALIDATION", "docx 解压体积过大");
+  if (compressedLen > 0 && total / compressedLen > MAX_COMPRESSION_RATIO) {
+    throw new DomainError("VALIDATION", "docx 压缩比异常（疑似 zip bomb）");
+  }
+}
+
 /** Validate the bytes are a real .docx (a zip containing word/document.xml). */
 function openDocx(bytes: Uint8Array): PizZip {
   let zip: PizZip;
@@ -50,6 +74,7 @@ function openDocx(bytes: Uint8Array): PizZip {
     throw new DomainError("VALIDATION", "不是有效的 docx 文件");
   }
   if (!zip.file("word/document.xml")) throw new DomainError("VALIDATION", "不是有效的 docx 文件（缺少正文）");
+  assertSafeArchive(zip, bytes.length);
   return zip;
 }
 
@@ -205,9 +230,15 @@ export async function previewTemplate(deps: Deps, auth: AuthContext, rawInput: u
   const input = PreviewTemplateInput.parse(rawInput);
   const [t] = await deps.db.select().from(documentTemplates).where(eq(documentTemplates.id, input.templateId)).limit(1);
   if (!t || !t.enabled) throw new DomainError("NOT_FOUND", "模板不存在");
-  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
+  const [m] = await deps.db.select({ ownerId: matters.ownerId, category: matters.category }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(m, auth);
+  // Same applicability gate as generateFromTemplate — preview must not leak a
+  // template's variables/metadata for a matter category it can't be used on.
+  const applicable = JSON.parse(t.applicableCategoriesJson) as string[];
+  if (applicable.length && !applicable.includes(m.category)) {
+    throw new DomainError("VALIDATION", "该模板不适用于本案件类别");
+  }
   const ctx = await assembleContext(deps, input.matterId);
   const flat = flatten(ctx);
   const variables = JSON.parse(t.variablesJson) as string[];
@@ -241,14 +272,20 @@ export async function generateFromTemplate(deps: Deps, auth: AuthContext, rawInp
     throw new DomainError("VALIDATION", "该模板不适用于本案件类别");
   }
 
-  // Context + inline overrides (dotted keys set nested paths).
+  // Context + inline overrides (dotted keys set nested paths). Override keys are
+  // user-controlled, so reject prototype-pollution segments before walking them
+  // into the (shared-runtime) context object.
   const ctx = await assembleContext(deps, input.matterId);
   if (input.overrides) {
     for (const [dotted, value] of Object.entries(input.overrides)) {
       const segs = dotted.split(".");
+      if (segs.some((s) => s === "__proto__" || s === "prototype" || s === "constructor" || s.length === 0)) {
+        throw new DomainError("VALIDATION", "非法的变量名");
+      }
       let cur = ctx as Record<string, unknown>;
       for (let i = 0; i < segs.length - 1; i++) {
-        if (typeof cur[segs[i]] !== "object" || cur[segs[i]] === null) cur[segs[i]] = {};
+        const next = cur[segs[i]];
+        if (typeof next !== "object" || next === null || Array.isArray(next)) cur[segs[i]] = {};
         cur = cur[segs[i]] as Record<string, unknown>;
       }
       cur[segs[segs.length - 1]] = value;
@@ -266,17 +303,15 @@ export async function generateFromTemplate(deps: Deps, auth: AuthContext, rawInp
     throw new DomainError("VALIDATION", `模板渲染失败：${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // Store as a real Document in the matter, then stamp its template provenance.
+  // Store as a real Document with its template provenance set atomically in the
+  // same insert (no separate UPDATE that could fail and leave an unstamped doc).
   const res = await uploadDocument(
     deps,
     auth,
     { matterId: input.matterId, name: input.name ?? `${t.name}.docx`, category: "OTHER", folderId: input.folderId, mimeType: DOCX_MIME },
     rendered,
+    { templateId: t.id, templateContextJson: JSON.stringify(ctx) },
   );
-  await deps.db
-    .update(documents)
-    .set({ templateId: t.id, templateContextJson: JSON.stringify(ctx), updatedAt: deps.clock.now() })
-    .where(eq(documents.id, res.id));
   await deps.audit.record(auth, { action: "TEMPLATE_GENERATE", targetType: "Document", targetId: res.id, detail: { templateId: t.id, matterId: input.matterId } });
   return { documentId: res.id, name: input.name ?? `${t.name}.docx` };
 }
