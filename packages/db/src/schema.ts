@@ -426,3 +426,55 @@ export const counters = sqliteTable("Counter", {
   key: text("key").primaryKey(),
   value: integer("value").notNull().default(0),
 });
+
+/** Firm-level key/value settings (e.g. firmLegalRepUserId). Value is JSON text. */
+export const systemSettings = sqliteTable("SystemSetting", {
+  key: text("key").primaryKey(),
+  valueJson: text("value_json").notNull(),
+  updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+});
+
+/** Seal-use request (用印审批, DOMAIN-SPEC §5.3).
+ * PENDING → APPROVED → STAMPED, side branches REJECTED / CANCELLED. The draft
+ * (待盖章稿) is required at creation; the stamped scan (盖章后扫描件) is required
+ * to reach STAMPED — both are Document ids (the 卷宗/材料 module owns the files). */
+export const sealRequests = sqliteTable(
+  "SealRequest",
+  {
+    id: text("id").primaryKey(),
+    code: text("code").notNull().unique(), // SEAL-2026-0001
+    // OFFICIAL_SEAL | CONTRACT_SEAL | CONTRACT_REVIEW_SEAL | FINANCE_SEAL | LEGAL_REP_SEAL
+    sealType: text("seal_type").notNull(),
+    matterId: text("matter_id"),
+    purpose: text("purpose").notNull(),
+    documentTitle: text("document_title").notNull(),
+    pageCount: integer("page_count").notNull().default(1),
+    requireCrossPageSeal: integer("require_cross_page_seal", { mode: "boolean" }).notNull().default(false),
+    copies: integer("copies").notNull().default(1),
+    // NORMAL | URGENT
+    urgency: text("urgency").notNull().default("NORMAL"),
+    draftDocId: text("draft_doc_id").notNull().unique(),
+    stampedDocId: text("stamped_doc_id").unique(),
+    // PENDING | APPROVED | STAMPED | REJECTED | CANCELLED
+    status: text("status").notNull().default("PENDING"),
+    requestNote: text("request_note"),
+    approveNote: text("approve_note"),
+    requestedById: text("requested_by_id").notNull(),
+    requestedAt: integer("requested_at", { mode: "timestamp" }).notNull(),
+    approvedById: text("approved_by_id"),
+    approvedAt: integer("approved_at", { mode: "timestamp" }),
+    stampedById: text("stamped_by_id"),
+    stampedAt: integer("stamped_at", { mode: "timestamp" }),
+    rejectedAt: integer("rejected_at", { mode: "timestamp" }),
+    // Resubmission lineage (old → new) after a rejection.
+    parentSealRequestId: text("parent_seal_request_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("SealRequest_status_idx").on(t.status, t.requestedAt),
+    index("SealRequest_requester_idx").on(t.requestedById, t.status),
+    index("SealRequest_type_idx").on(t.sealType, t.status),
+    index("SealRequest_matter_idx").on(t.matterId),
+  ],
+);

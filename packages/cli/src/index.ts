@@ -42,6 +42,16 @@ import {
   rejectDocument,
   fileDocument,
   deleteDocument,
+  createSealRequest,
+  approveSealRequest,
+  rejectSealRequest,
+  stampSealRequest,
+  cancelSealRequest,
+  listSealRequests,
+  getSealRequest,
+  listSealTypes,
+  setSetting,
+  listSettings,
   declineIntake,
   deleteFeeEntry,
   getClient,
@@ -669,5 +679,97 @@ document
   .requiredOption("--document-id <id>")
   .option("--token <token>")
   .action((opts) => run(async () => deleteDocument(buildDeps(), await resolveAuth(opts.token), { documentId: opts.documentId })));
+
+// ── settings (设置) ───────────────────────────────────────────────────────────
+const settings = program.command("settings").description("系统设置（ADMIN）");
+settings
+  .command("list")
+  .option("--token <token>")
+  .action((opts) => run(async () => listSettings(buildDeps(), await resolveAuth(opts.token))));
+settings
+  .command("set")
+  .requiredOption("--key <k>")
+  .requiredOption("--value <v>", "JSON 值；字符串可直接给")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => {
+      let value: unknown = opts.value;
+      try {
+        value = JSON.parse(opts.value);
+      } catch {
+        /* keep as raw string */
+      }
+      return setSetting(buildDeps(), await resolveAuth(opts.token), { key: opts.key, value });
+    }),
+  );
+
+// ── seal (用印审批) ────────────────────────────────────────────────────────────
+const seal = program.command("seal").description("用印审批");
+seal.command("types").description("章种类目录").action(() => run(async () => listSealTypes()));
+seal
+  .command("create")
+  .requiredOption("--seal-type <t>", "OFFICIAL_SEAL|CONTRACT_SEAL|CONTRACT_REVIEW_SEAL|FINANCE_SEAL|LEGAL_REP_SEAL")
+  .requiredOption("--purpose <p>", "用章事由")
+  .requiredOption("--document-title <t>", "待盖章文件标题")
+  .requiredOption("--draft-doc-id <id>", "待盖章稿（Document id）")
+  .option("--matter-id <id>")
+  .option("--page-count <n>")
+  .option("--copies <n>")
+  .option("--urgency <u>", "NORMAL|URGENT", "NORMAL")
+  .option("--require-cross-page-seal")
+  .option("--request-note <n>")
+  .option("--parent-seal-request-id <id>", "重新提交被驳回申请时引用原 ID")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      createSealRequest(buildDeps(), await resolveAuth(opts.token), {
+        sealType: opts.sealType,
+        purpose: opts.purpose,
+        documentTitle: opts.documentTitle,
+        draftDocId: opts.draftDocId,
+        matterId: opts.matterId,
+        pageCount: opts.pageCount,
+        copies: opts.copies,
+        urgency: opts.urgency,
+        requireCrossPageSeal: opts.requireCrossPageSeal ?? false,
+        requestNote: opts.requestNote,
+        parentSealRequestId: opts.parentSealRequestId,
+      }),
+    ),
+  );
+seal
+  .command("list")
+  .option("--status <s>", "PENDING|APPROVED|STAMPED|REJECTED|CANCELLED")
+  .option("--token <token>")
+  .action((opts) => run(async () => listSealRequests(buildDeps(), await resolveAuth(opts.token), { status: opts.status })));
+seal
+  .command("show")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => getSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id })));
+seal
+  .command("approve")
+  .requiredOption("--id <id>")
+  .option("--note <n>")
+  .option("--token <token>")
+  .action((opts) => run(async () => approveSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id, approveNote: opts.note })));
+seal
+  .command("reject")
+  .requiredOption("--id <id>")
+  .option("--note <n>")
+  .option("--token <token>")
+  .action((opts) => run(async () => rejectSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id, approveNote: opts.note })));
+seal
+  .command("stamp")
+  .description("登记盖章并回填扫描件 APPROVED → STAMPED")
+  .requiredOption("--id <id>")
+  .requiredOption("--stamped-doc-id <id>", "盖章后扫描件（Document id）")
+  .option("--token <token>")
+  .action((opts) => run(async () => stampSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id, stampedDocId: opts.stampedDocId })));
+seal
+  .command("cancel")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => cancelSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id })));
 
 program.parseAsync(process.argv);

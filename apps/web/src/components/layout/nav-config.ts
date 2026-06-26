@@ -9,6 +9,7 @@ import {
   Calendar,
   ScrollText,
   Settings,
+  Stamp,
 } from "lucide-react";
 
 export type NavItem = {
@@ -27,6 +28,7 @@ export const primaryNav: NavItem[] = [
   { label: "利益冲突", href: "/conflicts", icon: ShieldAlert },
   { label: "案件", href: "/matters", icon: FolderOpen },
   { label: "客户", href: "/clients", icon: Users },
+  { label: "用印", href: "/seals", icon: Stamp },
   { label: "财务", href: "/finance", icon: Wallet, disabled: true },
   { label: "日程", href: "/schedule", icon: Calendar, disabled: true },
 ];

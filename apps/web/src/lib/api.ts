@@ -172,6 +172,30 @@ export interface DocumentRow {
   uploadedById: string;
   createdAt: string;
 }
+export interface SealTypeRow {
+  type: string;
+  label: string;
+  requiresLegalRep: boolean;
+}
+export interface SealRequestRow {
+  id: string;
+  code: string;
+  sealType: string;
+  matterId: string | null;
+  purpose: string;
+  documentTitle: string;
+  pageCount: number;
+  copies: number;
+  urgency: string;
+  draftDocId: string;
+  stampedDocId: string | null;
+  status: string;
+  requestNote: string | null;
+  approveNote: string | null;
+  requestedById: string;
+  requestedAt: string;
+  createdAt: string;
+}
 export interface ClientRow {
   id: string;
   name: string;
@@ -330,6 +354,17 @@ export const api = {
     req<{ status: string }>(`/documents/${id}/reject`, { method: "POST", body: JSON.stringify({ reason }) }),
   fileDocument: (id: string) => req<{ status: string }>(`/documents/${id}/file`, { method: "POST" }),
   deleteDocument: (id: string) => req<{ deleted: boolean }>(`/documents/${id}/delete`, { method: "POST" }),
+  getSealTypes: () => req<SealTypeRow[]>("/seals/types"),
+  listSeals: (status?: string) => req<SealRequestRow[]>(`/seals${status ? `?status=${encodeURIComponent(status)}` : ""}`),
+  createSeal: (body: Record<string, unknown>) =>
+    req<{ id: string; code: string }>("/seals", { method: "POST", body: JSON.stringify(body) }),
+  approveSeal: (id: string, approveNote?: string) =>
+    req<{ status: string }>(`/seals/${id}/approve`, { method: "POST", body: JSON.stringify({ approveNote }) }),
+  rejectSeal: (id: string, approveNote?: string) =>
+    req<{ status: string }>(`/seals/${id}/reject`, { method: "POST", body: JSON.stringify({ approveNote }) }),
+  stampSeal: (id: string, stampedDocId: string) =>
+    req<{ status: string }>(`/seals/${id}/stamp`, { method: "POST", body: JSON.stringify({ stampedDocId }) }),
+  cancelSeal: (id: string) => req<{ status: string }>(`/seals/${id}/cancel`, { method: "POST" }),
   getArchiveChecklist: (matterId: string) =>
     req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
   archiveMatter: (matterId: string, body: Record<string, unknown>) =>

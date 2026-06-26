@@ -58,6 +58,24 @@ export type DocumentStatus =
   | "APPROVED"
   | "FILED";
 
+/** Seal kinds (用章种类, DOMAIN-SPEC §5.3). */
+export type SealType =
+  | "OFFICIAL_SEAL"
+  | "CONTRACT_SEAL"
+  | "CONTRACT_REVIEW_SEAL"
+  | "FINANCE_SEAL"
+  | "LEGAL_REP_SEAL";
+
+/** Seal-request lifecycle (DOMAIN-SPEC §5.3). */
+export type SealRequestStatus =
+  | "PENDING"
+  | "APPROVED"
+  | "STAMPED"
+  | "REJECTED"
+  | "CANCELLED";
+
+export type Urgency = "NORMAL" | "URGENT";
+
 /** The authenticated caller. Assembled by each entry shell (API/CLI) from a
  * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {

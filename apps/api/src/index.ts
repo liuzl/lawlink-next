@@ -43,6 +43,16 @@ import {
   rejectDocument,
   fileDocument,
   deleteDocument,
+  createSealRequest,
+  approveSealRequest,
+  rejectSealRequest,
+  stampSealRequest,
+  cancelSealRequest,
+  listSealRequests,
+  getSealRequest,
+  listSealTypes,
+  setSetting,
+  listSettings,
   declineIntake,
   deleteFeeEntry,
   getMatterFinance,
@@ -524,6 +534,78 @@ app.post("/api/documents/:id/file", requireAuth, async (c) => {
 app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   try {
     return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── settings (设置, ADMIN) ─────────────────────────────────────────────────────
+app.get("/api/settings", requireAuth, async (c) => {
+  try {
+    return c.json(await listSettings(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/settings", requireAuth, async (c) => {
+  try {
+    return c.json(await setSetting(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── seals (用印审批) ───────────────────────────────────────────────────────────
+// NOTE: /seals/types is registered before /seals/:id so "types" isn't read as an id.
+app.get("/api/seals/types", requireAuth, (c) => c.json(listSealTypes()));
+app.get("/api/seals", requireAuth, async (c) => {
+  try {
+    return c.json(await listSealRequests(buildDeps(), c.get("auth"), { status: c.req.query("status") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/seals", requireAuth, async (c) => {
+  try {
+    return c.json(await createSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/seals/:id", requireAuth, async (c) => {
+  try {
+    return c.json(await getSealRequest(buildDeps(), c.get("auth"), { sealRequestId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/seals/:id/approve", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await approveSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/seals/:id/reject", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await rejectSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/seals/:id/stamp", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await stampSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/seals/:id/cancel", requireAuth, async (c) => {
+  try {
+    return c.json(await cancelSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { sealRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

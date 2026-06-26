@@ -15,3 +15,5 @@ export * from "./matter/guards.js";
 export * from "./archive/index.js";
 export * from "./audit/index.js";
 export * from "./document/index.js";
+export * from "./settings/index.js";
+export * from "./seal/index.js";
