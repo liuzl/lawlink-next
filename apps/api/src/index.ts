@@ -7,11 +7,13 @@
  */
 import { randomUUID } from "node:crypto";
 import { Hono } from "hono";
+import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 import {
   convertIntake,
   createIntake,
   declineIntake,
+  listIntakes,
   login,
   requireJwtSecret,
   runConflictCheck,
@@ -54,6 +56,9 @@ function fail(c: Context, err: unknown) {
 type Env = { Variables: { auth: AuthContext } };
 const app = new Hono<Env>();
 
+// Allow the SPA dev server (and configured origins) to call the API.
+app.use("/api/*", cors({ origin: (process.env.LAWLINK_CORS_ORIGIN ?? "*") }));
+
 app.get("/api/health", (c) => c.json({ name: "lawlink-next", status: "ok" }));
 
 app.post("/api/auth/login", async (c) => {
@@ -75,6 +80,14 @@ async function requireAuth(c: Context<Env>, next: Next) {
   }
   await next();
 }
+
+app.get("/api/intakes", requireAuth, async (c) => {
+  try {
+    return c.json(await listIntakes(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
 
 app.post("/api/intakes", requireAuth, async (c) => {
   try {

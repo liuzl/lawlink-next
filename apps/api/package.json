@@ -5,9 +5,11 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts"
   },
   "dependencies": {
+    "@hono/node-server": "^1.13.7",
     "@lawlink/core": "workspace:*",
     "@lawlink/db": "workspace:*",
     "hono": "^4.6.14"
