@@ -37,5 +37,5 @@ export const primaryNav: NavItem[] = [
 
 export const secondaryNav: NavItem[] = [
   { label: "审计", href: "/audit", icon: ScrollText },
-  { label: "设置", href: "/settings", icon: Settings, disabled: true },
+  { label: "设置", href: "/settings", icon: Settings },
 ];

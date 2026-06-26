@@ -52,6 +52,7 @@ import {
   listSealTypes,
   setSetting,
   listSettings,
+  listUsers,
   ingestSms,
   listSms,
   getSms,
@@ -709,6 +710,14 @@ settings
       return setSetting(buildDeps(), await resolveAuth(opts.token), { key: opts.key, value });
     }),
   );
+
+// ── user (用户目录) ────────────────────────────────────────────────────────────
+const user = program.command("user").description("用户目录（ADMIN）");
+user
+  .command("list")
+  .option("--active-only")
+  .option("--token <token>")
+  .action((opts) => run(async () => listUsers(buildDeps(), await resolveAuth(opts.token), { activeOnly: !!opts.activeOnly })));
 
 // ── seal (用印审批) ────────────────────────────────────────────────────────────
 const seal = program.command("seal").description("用印审批");

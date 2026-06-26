@@ -5,8 +5,8 @@
  * (firmLegalRepUserId). The full 设置 surface lands in its own increment.
  */
 import { z } from "zod";
-import { asc, eq } from "drizzle-orm";
-import { systemSettings } from "@lawlink/db";
+import { and, asc, eq } from "drizzle-orm";
+import { systemSettings, users } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 
@@ -42,6 +42,17 @@ export async function setSetting(deps: Deps, auth: AuthContext, rawInput: unknow
   requireRole(auth, "ADMIN");
   const input = SetSettingInput.parse(rawInput);
   if (input.value === undefined) throw new DomainError("VALIDATION", "设置值不能为空");
+  // Known-key validation: the firm legal rep must reference a real, active user,
+  // otherwise LEGAL_REP_SEAL approval would be impossible (no one could match).
+  // An empty value clears the setting.
+  if (input.key === "firmLegalRepUserId" && typeof input.value === "string" && input.value.length > 0) {
+    const [u] = await deps.db
+      .select({ id: users.id })
+      .from(users)
+      .where(and(eq(users.id, input.value), eq(users.active, true)))
+      .limit(1);
+    if (!u) throw new DomainError("VALIDATION", "法定代表人必须是有效的在职用户");
+  }
   const now = deps.clock.now();
   const valueJson = JSON.stringify(input.value);
   await deps.db

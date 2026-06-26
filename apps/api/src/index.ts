@@ -53,6 +53,7 @@ import {
   listSealTypes,
   setSetting,
   listSettings,
+  listUsers,
   ingestSms,
   listSms,
   getSms,
@@ -541,6 +542,15 @@ app.post("/api/documents/:id/file", requireAuth, async (c) => {
 app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   try {
     return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── users (用户目录, ADMIN) ─────────────────────────────────────────────────────
+app.get("/api/users", requireAuth, async (c) => {
+  try {
+    return c.json(await listUsers(buildDeps(), c.get("auth"), { activeOnly: c.req.query("activeOnly") === "true" }));
   } catch (err) {
     return fail(c, err);
   }

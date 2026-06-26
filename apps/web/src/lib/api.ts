@@ -224,6 +224,18 @@ export interface SmsRow {
   processed: boolean;
   parsed: ParsedSms | null;
 }
+export interface UserRow {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  active: boolean;
+}
+export interface SettingRow {
+  key: string;
+  value: unknown;
+  updatedAt: string;
+}
 export interface ClientRow {
   id: string;
   name: string;
@@ -409,6 +421,10 @@ export const api = {
     req<{ deadlineId: string }>(`/sms/${id}/gen-deadline`, { method: "POST" }),
   markSmsProcessed: (id: string, processed = true) =>
     req<{ processed: boolean }>(`/sms/${id}/processed`, { method: "POST", body: JSON.stringify({ processed }) }),
+  listUsers: (activeOnly = false) => req<UserRow[]>(`/users${activeOnly ? "?activeOnly=true" : ""}`),
+  listSettings: () => req<SettingRow[]>("/settings"),
+  setSetting: (key: string, value: unknown) =>
+    req<{ key: string }>("/settings", { method: "POST", body: JSON.stringify({ key, value }) }),
   getArchiveChecklist: (matterId: string) =>
     req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
   archiveMatter: (matterId: string, body: Record<string, unknown>) =>
