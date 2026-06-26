@@ -62,18 +62,22 @@ function preScanZip(bytes: Uint8Array): void {
   const n = bytes.length;
   if (n < 22) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // Scan backward (within the max 64KB ZIP comment window) for an EOCD record
-  // whose declared comment length lands its end exactly at EOF — this rejects a
-  // stray 0x06054b50 sequence sitting inside file data.
+  // Pick the SAME EOCD PizZip will: the last 0x06054b50 signature in the file
+  // (its lastIndexOfSignature). A valid EOCD sits within the 64KB comment window
+  // of EOF, so the first hit scanning backward in that window is the global last
+  // occurrence. We must NOT skip to an earlier EOCD — an attacker can hide a fake
+  // EOCD (pointing at thousands of central headers) inside a real EOCD's comment;
+  // PizZip would parse the fake one. So if the last signature's declared comment
+  // does not end exactly at EOF, reject rather than continue.
   const maxBack = Math.min(n, 22 + 0xffff);
   let eocd = -1;
   for (let i = n - 22; i >= n - maxBack; i--) {
-    if (dv.getUint32(i, true) === 0x06054b50 && i + 22 + dv.getUint16(i + 20, true) === n) {
-      eocd = i;
-      break;
-    }
+    if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
   }
   if (eocd < 0) throw new DomainError("VALIDATION", "不是有效的 docx 文件");
+  if (eocd + 22 + dv.getUint16(eocd + 20, true) !== n) {
+    throw new DomainError("VALIDATION", "docx 目录区异常");
+  }
 
   let cdSize = dv.getUint32(eocd + 12, true);
   let cdOffset = dv.getUint32(eocd + 16, true);
