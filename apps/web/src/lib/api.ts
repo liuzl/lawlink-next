@@ -196,6 +196,34 @@ export interface SealRequestRow {
   requestedAt: string;
   createdAt: string;
 }
+export interface ParsedSms {
+  smsType: string;
+  caseNumbers: string[];
+  court: string | null;
+  hearingDate: string | null;
+  filingDate: string | null;
+  judgmentDate: string | null;
+  appealDeadline: string | null;
+  courtRoom: string | null;
+  judge: string | null;
+  clerk: string | null;
+  phones: string[];
+  amounts: string[];
+  urls: string[];
+  summary: string;
+}
+export interface SmsRow {
+  id: string;
+  rawText: string;
+  receivedAt: string;
+  smsType: string;
+  matchedMatterId: string | null;
+  matchedBy: string;
+  generatedHearingId: string | null;
+  generatedDeadlineId: string | null;
+  processed: boolean;
+  parsed: ParsedSms | null;
+}
 export interface ClientRow {
   id: string;
   name: string;
@@ -365,6 +393,22 @@ export const api = {
   stampSeal: (id: string, stampedDocId: string) =>
     req<{ status: string }>(`/seals/${id}/stamp`, { method: "POST", body: JSON.stringify({ stampedDocId }) }),
   cancelSeal: (id: string) => req<{ status: string }>(`/seals/${id}/cancel`, { method: "POST" }),
+  ingestSms: (rawText: string) =>
+    req<{ id: string; smsType: string; matchedMatterId: string | null; parsed: ParsedSms }>("/sms", {
+      method: "POST",
+      body: JSON.stringify({ rawText }),
+    }),
+  listSms: (processed?: boolean) =>
+    req<SmsRow[]>(`/sms${processed === undefined ? "" : `?processed=${processed}`}`),
+  getSms: (id: string) => req<SmsRow>(`/sms/${id}`),
+  assignSms: (id: string, matterId: string) =>
+    req<{ matchedBy: string }>(`/sms/${id}/assign`, { method: "POST", body: JSON.stringify({ matterId }) }),
+  genHearingFromSms: (id: string) =>
+    req<{ hearingId: string }>(`/sms/${id}/gen-hearing`, { method: "POST" }),
+  genDeadlineFromSms: (id: string) =>
+    req<{ deadlineId: string }>(`/sms/${id}/gen-deadline`, { method: "POST" }),
+  markSmsProcessed: (id: string, processed = true) =>
+    req<{ processed: boolean }>(`/sms/${id}/processed`, { method: "POST", body: JSON.stringify({ processed }) }),
   getArchiveChecklist: (matterId: string) =>
     req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
   archiveMatter: (matterId: string, body: Record<string, unknown>) =>

@@ -10,6 +10,7 @@ import { MatterDetail } from "@/pages/MatterDetail";
 import { Clients } from "@/pages/Clients";
 import { ClientDetail } from "@/pages/ClientDetail";
 import { Seals } from "@/pages/Seals";
+import { Sms } from "@/pages/Sms";
 import { Audit } from "@/pages/Audit";
 
 /** 认证门卫：无 token 跳登录，否则渲染外壳布局 */
@@ -30,6 +31,7 @@ export function App() {
         <Route path="/clients" element={<Clients />} />
         <Route path="/clients/:id" element={<ClientDetail />} />
         <Route path="/seals" element={<Seals />} />
+        <Route path="/sms" element={<Sms />} />
         <Route path="/audit" element={<Audit />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

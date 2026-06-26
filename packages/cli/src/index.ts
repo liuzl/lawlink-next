@@ -52,6 +52,13 @@ import {
   listSealTypes,
   setSetting,
   listSettings,
+  ingestSms,
+  listSms,
+  getSms,
+  assignSmsMatter,
+  generateHearingFromSms,
+  generateDeadlineFromSms,
+  markSmsProcessed,
   declineIntake,
   deleteFeeEntry,
   getClient,
@@ -771,5 +778,82 @@ seal
   .requiredOption("--id <id>")
   .option("--token <token>")
   .action((opts) => run(async () => cancelSealRequest(buildDeps(), await resolveAuth(opts.token), { sealRequestId: opts.id })));
+
+// ── sms (法院短信解析) ─────────────────────────────────────────────────────────
+const sms = program.command("sms").description("法院短信解析");
+sms
+  .command("ingest")
+  .description("解析并入库一条短信（自动按案号匹配案件）")
+  .requiredOption("--raw-text <t>", "短信原文")
+  .option("--token <token>")
+  .action((opts) => run(async () => ingestSms(buildDeps(), await resolveAuth(opts.token), { rawText: opts.rawText })));
+sms
+  .command("list")
+  .option("--processed", "仅看已处理")
+  .option("--unprocessed", "仅看未处理")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      listSms(buildDeps(), await resolveAuth(opts.token), {
+        processed: opts.processed ? true : opts.unprocessed ? false : undefined,
+      }),
+    ),
+  );
+sms
+  .command("show")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => getSms(buildDeps(), await resolveAuth(opts.token), { smsId: opts.id })));
+sms
+  .command("assign")
+  .description("手动匹配案件")
+  .requiredOption("--id <id>")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => assignSmsMatter(buildDeps(), await resolveAuth(opts.token), { smsId: opts.id, matterId: opts.matterId })));
+sms
+  .command("gen-hearing")
+  .description("一键生成开庭")
+  .requiredOption("--id <id>")
+  .option("--procedure-id <id>")
+  .option("--title <t>")
+  .option("--starts-at <datetime>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      generateHearingFromSms(buildDeps(), await resolveAuth(opts.token), {
+        smsId: opts.id,
+        procedureId: opts.procedureId,
+        title: opts.title,
+        startsAt: opts.startsAt,
+      }),
+    ),
+  );
+sms
+  .command("gen-deadline")
+  .description("一键生成期限")
+  .requiredOption("--id <id>")
+  .option("--procedure-id <id>")
+  .option("--title <t>")
+  .option("--due-at <date>")
+  .option("--category <c>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      generateDeadlineFromSms(buildDeps(), await resolveAuth(opts.token), {
+        smsId: opts.id,
+        procedureId: opts.procedureId,
+        title: opts.title,
+        dueAt: opts.dueAt,
+        category: opts.category,
+      }),
+    ),
+  );
+sms
+  .command("processed")
+  .requiredOption("--id <id>")
+  .option("--undo", "标记为未处理")
+  .option("--token <token>")
+  .action((opts) => run(async () => markSmsProcessed(buildDeps(), await resolveAuth(opts.token), { smsId: opts.id, processed: !opts.undo })));
 
 program.parseAsync(process.argv);

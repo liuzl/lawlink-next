@@ -53,6 +53,13 @@ import {
   listSealTypes,
   setSetting,
   listSettings,
+  ingestSms,
+  listSms,
+  getSms,
+  assignSmsMatter,
+  generateHearingFromSms,
+  generateDeadlineFromSms,
+  markSmsProcessed,
   declineIntake,
   deleteFeeEntry,
   getMatterFinance,
@@ -606,6 +613,62 @@ app.post("/api/seals/:id/stamp", requireAuth, async (c) => {
 app.post("/api/seals/:id/cancel", requireAuth, async (c) => {
   try {
     return c.json(await cancelSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { sealRequestId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── sms (法院短信解析) ───────────────────────────────────────────────────────
+app.get("/api/sms", requireAuth, async (c) => {
+  try {
+    const p = c.req.query("processed");
+    return c.json(await listSms(buildDeps(), c.get("auth"), { processed: p === undefined ? undefined : p === "true" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/sms", requireAuth, async (c) => {
+  try {
+    return c.json(await ingestSms(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/sms/:id", requireAuth, async (c) => {
+  try {
+    return c.json(await getSms(buildDeps(), c.get("auth"), { smsId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/sms/:id/assign", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await assignSmsMatter(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/sms/:id/gen-hearing", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await generateHearingFromSms(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/sms/:id/gen-deadline", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await generateDeadlineFromSms(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/sms/:id/processed", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    return c.json(await markSmsProcessed(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

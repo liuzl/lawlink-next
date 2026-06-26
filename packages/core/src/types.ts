@@ -76,6 +76,21 @@ export type SealRequestStatus =
 
 export type Urgency = "NORMAL" | "URGENT";
 
+/** Court-SMS classification (法院短信解析, DOMAIN-SPEC §5.6). */
+export type SmsType =
+  | "HEARING_NOTICE"
+  | "SERVICE_NOTICE"
+  | "FEE_NOTICE"
+  | "MEDIATION"
+  | "ENFORCEMENT"
+  | "FILING_NOTICE"
+  | "JUDGMENT_NOTICE"
+  | "EVIDENCE_SUBMIT"
+  | "OTHER";
+
+/** How an SMS was matched to a matter. */
+export type SmsMatchSource = "AUTO_CASE_NUMBER" | "MANUAL" | "UNMATCHED";
+
 /** The authenticated caller. Assembled by each entry shell (API/CLI) from a
  * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {

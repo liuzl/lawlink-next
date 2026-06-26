@@ -10,6 +10,7 @@ import {
   ScrollText,
   Settings,
   Stamp,
+  MessageSquareText,
 } from "lucide-react";
 
 export type NavItem = {
@@ -29,6 +30,7 @@ export const primaryNav: NavItem[] = [
   { label: "案件", href: "/matters", icon: FolderOpen },
   { label: "客户", href: "/clients", icon: Users },
   { label: "用印", href: "/seals", icon: Stamp },
+  { label: "法院短信", href: "/sms", icon: MessageSquareText },
   { label: "财务", href: "/finance", icon: Wallet, disabled: true },
   { label: "日程", href: "/schedule", icon: Calendar, disabled: true },
 ];

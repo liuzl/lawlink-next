@@ -17,3 +17,4 @@ export * from "./audit/index.js";
 export * from "./document/index.js";
 export * from "./settings/index.js";
 export * from "./seal/index.js";
+export * from "./sms/index.js";

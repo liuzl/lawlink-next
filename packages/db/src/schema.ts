@@ -427,6 +427,37 @@ export const counters = sqliteTable("Counter", {
   value: integer("value").notNull().default(0),
 });
 
+/** Court-SMS inbox (法院短信解析, DOMAIN-SPEC §5.6). Raw text is parsed locally
+ * (regex) into parsedJson, classified, and auto-matched to a matter by case
+ * number; a one-click action can spawn a Hearing/Deadline (ids tracked here). */
+export const smsMessages = sqliteTable(
+  "SmsMessage",
+  {
+    id: text("id").primaryKey(),
+    rawText: text("raw_text").notNull(),
+    receivedAt: integer("received_at", { mode: "timestamp" }).notNull(),
+    receivedById: text("received_by_id").notNull(),
+    parsedJson: text("parsed_json").notNull(),
+    // HEARING_NOTICE | SERVICE_NOTICE | FEE_NOTICE | MEDIATION | ENFORCEMENT |
+    // FILING_NOTICE | JUDGMENT_NOTICE | EVIDENCE_SUBMIT | OTHER
+    smsType: text("sms_type").notNull().default("OTHER"),
+    matchedMatterId: text("matched_matter_id"),
+    // AUTO_CASE_NUMBER | MANUAL | UNMATCHED
+    matchedBy: text("matched_by").notNull().default("UNMATCHED"),
+    generatedHearingId: text("generated_hearing_id"),
+    generatedDeadlineId: text("generated_deadline_id"),
+    processed: integer("processed", { mode: "boolean" }).notNull().default(false),
+    processedAt: integer("processed_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("SmsMessage_receiver_idx").on(t.receivedById, t.processed, t.receivedAt),
+    index("SmsMessage_matter_idx").on(t.matchedMatterId),
+    index("SmsMessage_type_idx").on(t.smsType, t.receivedAt),
+  ],
+);
+
 /** Firm-level key/value settings (e.g. firmLegalRepUserId). Value is JSON text. */
 export const systemSettings = sqliteTable("SystemSetting", {
   key: text("key").primaryKey(),
