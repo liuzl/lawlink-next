@@ -85,12 +85,16 @@ export async function createSealRequest(deps: Deps, auth: AuthContext, rawInput:
   if (input.matterId && draft.matterId !== input.matterId) {
     throw new DomainError("VALIDATION", "待盖章稿不属于该案件");
   }
+  // A seal is ALWAYS matter-bound: its draft is a Document, and documents always
+  // belong to a matter (registerDocument requires matterId). Enforce + fail
+  // closed so the downstream stamp step — which gates on matter access — always
+  // has a matter to check. matterId stays nullable in the schema but is always
+  // populated here; a null would only arise from a future doc-module change.
   const matterId = input.matterId ?? draft.matterId ?? null;
-  if (matterId) {
-    const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
-    if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    assertMatterAccess(m, auth);
-  }
+  if (!matterId) throw new DomainError("VALIDATION", "用印申请必须关联案件（待盖章稿需归属案件）");
+  const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
+  if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
+  assertMatterAccess(m, auth);
 
   // Resubmission: the parent must be a REJECTED request the same user owns.
   if (input.parentSealRequestId) {
