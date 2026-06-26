@@ -120,6 +120,13 @@
       "when": 1782485300231,
       "tag": "0016_empty_kulan_gath",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "6",
+      "when": 1782488587471,
+      "tag": "0017_sticky_baron_zemo",
+      "breakpoints": true
     }
   ]
 }

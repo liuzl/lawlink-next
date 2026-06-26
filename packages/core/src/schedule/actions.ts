@@ -5,7 +5,7 @@
  * own, others none) — the same matter scope the dashboard uses.
  */
 import { z } from "zod";
-import { and, eq, getTableColumns, gte, lte } from "drizzle-orm";
+import { and, eq, getTableColumns, gte, inArray, lte } from "drizzle-orm";
 import { deadlines, hearings, matterProcedures, matters, preservations, tasks } from "@lawlink/db";
 import { type AuthContext, type Deps } from "../types.js";
 import { isManagement } from "../permissions.js";
@@ -107,6 +107,10 @@ export async function getSchedule(deps: Deps, auth: AuthContext, rawInput?: unkn
     .innerJoin(matters, eq(preservations.matterId, matters.id))
     .where(
       and(
+        // Only LIVE preservations are agenda obligations — exclude LIFTED/EXPIRED
+        // (matches the dashboard) so cancelled/lapsed rows aren't resurrected as
+        // current deadlines. Status-leading also lets the (status,expiry) index apply.
+        inArray(preservations.status, ["ACTIVE", "RENEWED"]),
         gte(preservations.expiryDate, from),
         lte(preservations.expiryDate, to),
         matterVis,

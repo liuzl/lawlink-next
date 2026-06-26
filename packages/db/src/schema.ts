@@ -242,7 +242,11 @@ export const tasks = sqliteTable(
     createdById: text("created_by_id").notNull(),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("Task_matter_idx").on(t.matterId, t.completed)],
+  (t) => [
+    index("Task_matter_idx").on(t.matterId, t.completed),
+    // Schedule/agenda range-scans due tasks by date across matters.
+    index("Task_due_idx").on(t.dueAt),
+  ],
 );
 
 /** Communication record (沟通记录, DOMAIN-SPEC §4.9). */
@@ -278,7 +282,11 @@ export const hearings = sqliteTable(
     notes: text("notes"),
     createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
   },
-  (t) => [index("Hearing_matter_idx").on(t.matterId, t.startsAt)],
+  (t) => [
+    index("Hearing_matter_idx").on(t.matterId, t.startsAt),
+    // Schedule/agenda range-scans by time across matters.
+    index("Hearing_starts_idx").on(t.startsAt),
+  ],
 );
 
 /** Property preservation (财产保全) — expiry tracking + renewal (DOMAIN-SPEC §6.5, §9.2). */
