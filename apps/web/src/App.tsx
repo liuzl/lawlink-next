@@ -13,6 +13,8 @@ import { Seals } from "@/pages/Seals";
 import { Sms } from "@/pages/Sms";
 import { Audit } from "@/pages/Audit";
 import { Reports } from "@/pages/Reports";
+import { Finance } from "@/pages/Finance";
+import { Schedule } from "@/pages/Schedule";
 import { Notifications } from "@/pages/Notifications";
 import { Settings } from "@/pages/Settings";
 
@@ -37,6 +39,8 @@ export function App() {
         <Route path="/sms" element={<Sms />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/finance" element={<Finance />} />
+        <Route path="/schedule" element={<Schedule />} />
         <Route path="/notifications" element={<Notifications />} />
         <Route path="/settings" element={<Settings />} />
       </Route>

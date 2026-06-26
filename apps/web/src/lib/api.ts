@@ -224,6 +224,45 @@ export interface SmsRow {
   processed: boolean;
   parsed: ParsedSms | null;
 }
+export interface ScheduleItem {
+  kind: "HEARING" | "DEADLINE" | "PRESERVATION" | "TASK";
+  id: string;
+  title: string;
+  at: string;
+  matterId: string | null;
+  internalCode: string | null;
+  matterTitle: string | null;
+  meta?: Record<string, unknown>;
+}
+export interface ScheduleData {
+  from: string;
+  to: string;
+  items: ScheduleItem[];
+}
+export interface FinanceLedgerRow {
+  id: string;
+  type: string;
+  amount: string;
+  occurredAt: string;
+  payerOrPayee: string | null;
+  matterId: string;
+  internalCode: string | null;
+  matterTitle: string | null;
+}
+export interface FinanceOverview {
+  months: number;
+  since: string;
+  summary: {
+    receivable: string;
+    received: string;
+    refund: string;
+    cost: string;
+    commission: string;
+    netReceived: string;
+  };
+  monthly: { month: string; netReceived: string }[];
+  ledger: FinanceLedgerRow[];
+}
 export interface ReportData {
   period: { start: string; end: string; label: string };
   portfolio: {
@@ -464,6 +503,15 @@ export const api = {
     req<{ read: boolean }>(`/notifications/${id}/read`, { method: "POST" }),
   markAllNotificationsRead: () =>
     req<{ marked: number }>("/notifications/read-all", { method: "POST" }),
+  getSchedule: (params: { from?: string; to?: string } = {}) => {
+    const q = new URLSearchParams();
+    if (params.from) q.set("from", params.from);
+    if (params.to) q.set("to", params.to);
+    const qs = q.toString();
+    return req<ScheduleData>(`/schedule${qs ? `?${qs}` : ""}`);
+  },
+  getFinanceOverview: (months?: number) =>
+    req<FinanceOverview>(`/finance/overview${months ? `?months=${months}` : ""}`),
   getReport: (params: { preset?: string; start?: string; end?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.preset) q.set("preset", params.preset);

@@ -21,3 +21,4 @@ export * from "./sms/index.js";
 export * from "./user/index.js";
 export * from "./reports/index.js";
 export * from "./notification/index.js";
+export * from "./schedule/index.js";

@@ -55,6 +55,8 @@ import {
   listSettings,
   listUsers,
   getReport,
+  getSchedule,
+  getFinanceOverview,
   listNotifications,
   unreadNotificationCount,
   markNotificationRead,
@@ -590,6 +592,24 @@ app.post("/api/notifications/read", requireAuth, async (c) => {
 app.post("/api/notifications/:id/read", requireAuth, async (c) => {
   try {
     return c.json(await markNotificationRead(buildDeps(), c.get("auth"), { notificationId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── schedule (日程) ────────────────────────────────────────────────────────────
+app.get("/api/schedule", requireAuth, async (c) => {
+  try {
+    return c.json(await getSchedule(buildDeps(), c.get("auth"), { from: c.req.query("from"), to: c.req.query("to") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── finance overview (全所财务台账) ─────────────────────────────────────────────
+app.get("/api/finance/overview", requireAuth, async (c) => {
+  try {
+    return c.json(await getFinanceOverview(buildDeps(), c.get("auth"), { months: c.req.query("months") }));
   } catch (err) {
     return fail(c, err);
   }

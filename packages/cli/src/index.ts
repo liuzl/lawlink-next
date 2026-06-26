@@ -54,6 +54,8 @@ import {
   listSettings,
   listUsers,
   getReport,
+  getSchedule,
+  getFinanceOverview,
   listNotifications,
   unreadNotificationCount,
   markNotificationRead,
@@ -450,6 +452,12 @@ archive
 // ── finance ───────────────────────────────────────────────────────────────────
 const finance = program.command("finance").description("财务");
 finance
+  .command("overview")
+  .description("全所财务台账（ADMIN / 主任 / 财务）")
+  .option("--months <n>", "近 N 月", "6")
+  .option("--token <token>")
+  .action((opts) => run(async () => getFinanceOverview(buildDeps(), await resolveAuth(opts.token), { months: opts.months })));
+finance
   .command("set-plan")
   .description("设置分成方案：--plan userId:percent[:label] 可多次")
   .requiredOption("--matter-id <id>")
@@ -737,6 +745,15 @@ notify
   .command("read-all")
   .option("--token <token>")
   .action((opts) => run(async () => markAllNotificationsRead(buildDeps(), await resolveAuth(opts.token))));
+
+// ── schedule (日程) ────────────────────────────────────────────────────────────
+program
+  .command("schedule")
+  .description("日程：开庭 / 期限 / 保全到期 / 任务")
+  .option("--from <date>", "起 YYYY-MM-DD")
+  .option("--to <date>", "止 YYYY-MM-DD")
+  .option("--token <token>")
+  .action((opts) => run(async () => getSchedule(buildDeps(), await resolveAuth(opts.token), { from: opts.from, to: opts.to })));
 
 // ── report (报表) ──────────────────────────────────────────────────────────────
 program
