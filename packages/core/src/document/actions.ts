@@ -227,10 +227,16 @@ export async function listDocuments(deps: Deps, auth: AuthContext, rawInput: { m
     .from(documents)
     .where(and(eq(documents.matterId, rawInput.matterId), isNull(documents.deletedAt)))
     .orderBy(asc(documents.folderId), desc(documents.createdAt));
-  // Never expose the internal storageKey (it's a download capability) — callers
-  // download by document id, which is authorization-checked. `size` is kept so
-  // the UI can show a download affordance for documents that have bytes.
-  return rows.map(({ storageKey: _omit, ...r }) => ({ ...r, tags: JSON.parse(r.tagsJson) as string[] }));
+  // Strip internal fields before returning to clients:
+  //  - storageKey is a download capability (callers download by id, auth-checked);
+  //  - templateContextJson is a provenance snapshot that embeds party PII (client/
+  //    opposing idNumber, etc.) and must never ride along on a list response.
+  // `templateId` stays (a harmless FK the UI uses to badge generated docs).
+  // `size` stays so the UI can show a download affordance for docs that have bytes.
+  return rows.map(({ storageKey: _sk, templateContextJson: _tc, ...r }) => ({
+    ...r,
+    tags: JSON.parse(r.tagsJson) as string[],
+  }));
 }
 
 export const MoveDocumentInput = z.object({
