@@ -5,7 +5,7 @@
  * renamable, but a default folder can't be deleted. Manual folders may be added.
  */
 import { z } from "zod";
-import { and, asc, eq, isNull } from "drizzle-orm";
+import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
 import { documentFolders, documents, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -160,14 +160,26 @@ export async function deleteFolder(deps: Deps, auth: AuthContext, rawInput: unkn
   await assertMatterWritable(deps.db, auth, f.matterId);
   if (f.isDefault) throw new DomainError("INVALID_STATE", "系统预置卷宗不可删除，仅可改名");
 
-  const [held] = await deps.db
-    .select({ id: documents.id })
-    .from(documents)
-    .where(and(eq(documents.folderId, folderId), isNull(documents.deletedAt)))
-    .limit(1);
-  if (held) throw new DomainError("INVALID_STATE", "卷宗内仍有材料，请先移出或删除");
-
-  await deps.db.delete(documentFolders).where(eq(documentFolders.id, folderId));
+  // Atomic empty-check + delete in ONE statement: only delete the folder when no
+  // LIVE document references it, evaluated under the write lock. This closes the
+  // TOCTOU where a concurrent register/move attaches a document between a
+  // separate emptiness read and the delete (which would orphan that material).
+  const deleted = await deps.db
+    .delete(documentFolders)
+    .where(
+      and(
+        eq(documentFolders.id, folderId),
+        eq(documentFolders.isDefault, false),
+        notExists(
+          deps.db
+            .select({ one: sql`1` })
+            .from(documents)
+            .where(and(eq(documents.folderId, folderId), isNull(documents.deletedAt))),
+        ),
+      ),
+    )
+    .returning({ id: documentFolders.id });
+  if (deleted.length === 0) throw new DomainError("INVALID_STATE", "卷宗内仍有材料，请先移出或删除");
   await deps.audit.record(auth, {
     action: "FOLDER_DELETE",
     targetType: "DocumentFolder",

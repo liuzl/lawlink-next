@@ -10,7 +10,7 @@
  * metadata, folder placement, lifecycle and soft-delete.
  */
 import { z } from "zod";
-import { and, asc, desc, eq, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { documentFolders, documents, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -18,6 +18,15 @@ import { assertMatterAccess } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 
 const CATEGORY = z.enum(["EVIDENCE", "PLEADING", "PROCEDURE", "JUDGMENT", "CONTRACT", "OTHER"]);
+
+/**
+ * Correlated guard: the document's matter is NOT archived. Added to every
+ * document write predicate so an archive landing AFTER the preflight check
+ * (TOCTOU) still can't mutate a closed case's materials — the guarded write
+ * simply matches 0 rows. The preflight in writableDocument() handles the common
+ * case with a precise message; this closes the race.
+ */
+const matterNotArchived = sql`exists (select 1 from ${matters} where ${matters.id} = ${documents.matterId} and ${matters.status} <> 'ARCHIVED')`;
 
 /** Load a document (excluding soft-deleted) + assert matter WRITE access. */
 async function writableDocument(deps: Deps, auth: AuthContext, documentId: string) {
@@ -50,46 +59,56 @@ export const RegisterDocumentInput = z.object({
 export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = RegisterDocumentInput.parse(rawInput);
-  await assertMatterWritable(deps.db, auth, input.matterId);
-
-  // A folder, if given, must belong to THIS matter (no cross-matter placement).
-  if (input.folderId) {
-    const [f] = await deps.db
-      .select({ matterId: documentFolders.matterId })
-      .from(documentFolders)
-      .where(eq(documentFolders.id, input.folderId))
-      .limit(1);
-    if (!f || f.matterId !== input.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
-  }
+  await assertMatterWritable(deps.db, auth, input.matterId); // preflight (precise errors)
 
   const now = deps.clock.now();
   const id = deps.ids.newId();
-  await deps.db.insert(documents).values({
-    id,
-    matterId: input.matterId,
-    intakeId: null,
-    procedureId: null,
-    folderId: input.folderId ?? null,
-    name: input.name,
-    category: input.category,
-    sourceParty: input.sourceParty ?? null,
-    status: "DRAFT",
-    reviewedById: null,
-    reviewedAt: null,
-    approvedById: null,
-    approvedAt: null,
-    version: 1,
-    isLatest: true,
-    familyId: null,
-    storageKey: input.storageKey ?? null,
-    mimeType: input.mimeType ?? null,
-    size: input.size ?? null,
-    sha256: input.sha256 ?? null,
-    tagsJson: JSON.stringify(input.tags ?? []),
-    uploadedById: auth.userId,
-    deletedAt: null,
-    createdAt: now,
-    updatedAt: now,
+  // Re-validate matter (not archived) AND folder placement INSIDE the txn, right
+  // before the insert, so an archive/folder-delete landing after the preflight
+  // can't slip a material onto a closed case or a vanished folder.
+  await deps.db.transaction(async (tx) => {
+    const [m] = await tx
+      .select({ status: matters.status })
+      .from(matters)
+      .where(eq(matters.id, input.matterId))
+      .limit(1);
+    if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
+    if (m.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能登记材料");
+    if (input.folderId) {
+      const [f] = await tx
+        .select({ matterId: documentFolders.matterId })
+        .from(documentFolders)
+        .where(eq(documentFolders.id, input.folderId))
+        .limit(1);
+      if (!f || f.matterId !== input.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
+    }
+    await tx.insert(documents).values({
+      id,
+      matterId: input.matterId,
+      intakeId: null,
+      procedureId: null,
+      folderId: input.folderId ?? null,
+      name: input.name,
+      category: input.category,
+      sourceParty: input.sourceParty ?? null,
+      status: "DRAFT",
+      reviewedById: null,
+      reviewedAt: null,
+      approvedById: null,
+      approvedAt: null,
+      version: 1,
+      isLatest: true,
+      familyId: null,
+      storageKey: input.storageKey ?? null,
+      mimeType: input.mimeType ?? null,
+      size: input.size ?? null,
+      sha256: input.sha256 ?? null,
+      tagsJson: JSON.stringify(input.tags ?? []),
+      uploadedById: auth.userId,
+      deletedAt: null,
+      createdAt: now,
+      updatedAt: now,
+    });
   });
   await deps.audit.record(auth, {
     action: "DOCUMENT_REGISTER",
@@ -136,10 +155,12 @@ export async function moveDocument(deps: Deps, auth: AuthContext, rawInput: unkn
     if (!f || f.matterId !== doc.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
   }
 
-  await deps.db
+  const moved = await deps.db
     .update(documents)
     .set({ folderId: input.folderId ?? null, updatedAt: deps.clock.now() })
-    .where(eq(documents.id, input.documentId));
+    .where(and(eq(documents.id, input.documentId), isNull(documents.deletedAt), matterNotArchived))
+    .returning({ id: documents.id });
+  if (moved.length === 0) throw new DomainError("INVALID_STATE", "材料已删除或案件已归档，不能移动");
   await deps.audit.record(auth, {
     action: "DOCUMENT_MOVE",
     targetType: "Document",
@@ -161,7 +182,14 @@ async function transition(
   const updated = await deps.db
     .update(documents)
     .set({ ...set, updatedAt: deps.clock.now() })
-    .where(and(eq(documents.id, documentId), eq(documents.status, from), isNull(documents.deletedAt)))
+    .where(
+      and(
+        eq(documents.id, documentId),
+        eq(documents.status, from),
+        isNull(documents.deletedAt),
+        matterNotArchived,
+      ),
+    )
     .returning({ id: documents.id });
   if (updated.length === 0) throw new DomainError("INVALID_STATE", msg);
 }
@@ -246,10 +274,14 @@ export async function deleteDocument(deps: Deps, auth: AuthContext, rawInput: un
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER");
   const { documentId } = DocumentIdInput.parse(rawInput);
   const doc = await writableDocument(deps, auth, documentId);
-  await deps.db
+  // Guard the soft-delete on matter-not-archived too (race backstop). Clearing
+  // folderId on delete keeps the orphan-by-deleted-folder surface minimal.
+  const removed = await deps.db
     .update(documents)
-    .set({ deletedAt: deps.clock.now(), isLatest: false })
-    .where(eq(documents.id, documentId));
+    .set({ deletedAt: deps.clock.now(), isLatest: false, folderId: null })
+    .where(and(eq(documents.id, documentId), isNull(documents.deletedAt), matterNotArchived))
+    .returning({ id: documents.id });
+  if (removed.length === 0) throw new DomainError("INVALID_STATE", "材料已删除或案件已归档");
   await deps.audit.record(auth, {
     action: "DOCUMENT_DELETE",
     targetType: "Document",

@@ -1078,9 +1078,16 @@ export function MatterDetail() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
-          {/* Group documents by folder; a trailing "未归卷" group holds unfiled docs. */}
+          {/* Group documents by folder; the trailing "未归卷" group holds both
+              unfiled docs AND any doc whose folderId no longer resolves to a
+              current folder (e.g. its folder was deleted) — so a material can
+              never silently disappear from the matter view. */}
           {[...folders, { id: "", name: "未归卷", isDefault: false } as FolderRow].map((f) => {
-            const docs = documents.filter((d) => (d.folderId ?? "") === f.id);
+            const folderIds = new Set(folders.map((x) => x.id));
+            const docs =
+              f.id === ""
+                ? documents.filter((d) => !d.folderId || !folderIds.has(d.folderId))
+                : documents.filter((d) => d.folderId === f.id);
             if (f.id === "" && docs.length === 0) return null;
             return (
               <div key={f.id || "__loose"} className="rounded-sm border border-border">
