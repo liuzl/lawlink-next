@@ -162,6 +162,26 @@ export interface ClientContact {
 export interface ClientDetail extends ClientRow {
   contacts: ClientContact[];
 }
+export interface TaskRow {
+  id: string;
+  title: string;
+  dueAt: string | null;
+  completed: boolean;
+}
+export interface NoteRow {
+  id: string;
+  channel: string;
+  withWhom: string | null;
+  occurredAt: string;
+  content: string;
+}
+export interface HearingRow {
+  id: string;
+  title: string;
+  startsAt: string;
+  room: string | null;
+  judge: string | null;
+}
 
 export const api = {
   login: (email: string, password: string) =>
@@ -214,4 +234,14 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ newExpiryDate }),
     }),
+  listTasks: (matterId: string) => req<TaskRow[]>(`/matters/${matterId}/tasks`),
+  addTask: (matterId: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/matters/${matterId}/tasks`, { method: "POST", body: JSON.stringify(body) }),
+  completeTask: (id: string) => req<{ completed: boolean }>(`/tasks/${id}/complete`, { method: "POST" }),
+  listNotes: (matterId: string) => req<NoteRow[]>(`/matters/${matterId}/notes`),
+  addNote: (matterId: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/matters/${matterId}/notes`, { method: "POST", body: JSON.stringify(body) }),
+  listHearings: (matterId: string) => req<HearingRow[]>(`/matters/${matterId}/hearings`),
+  addHearing: (procedureId: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/procedures/${procedureId}/hearings`, { method: "POST", body: JSON.stringify(body) }),
 };

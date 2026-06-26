@@ -1,12 +1,15 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { CalendarClock, Check, ChevronLeft, Snowflake } from "lucide-react";
+import { CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
 import {
   api,
   getRole,
   type DeadlineRow,
+  type HearingRow,
   type MatterDetail as MatterDetailData,
+  type NoteRow,
   type PreservationRow,
+  type TaskRow,
 } from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -89,6 +92,15 @@ const PRES_STATUS_CN: Record<string, string> = {
   LIFTED: "已解除",
 };
 
+const NOTE_CHANNEL_CN: Record<string, string> = {
+  PHONE: "电话",
+  WECHAT: "微信",
+  EMAIL: "邮件",
+  MEETING: "会议",
+  COURT: "法院",
+  OTHER: "其他",
+};
+
 function dueDays(dueAt: string): number {
   const [y, m, d] = dueAt.slice(0, 10).split("-").map(Number);
   const due = new Date(y, (m ?? 1) - 1, d ?? 1);
@@ -119,6 +131,19 @@ export function MatterDetail() {
   const [dlEvent, setDlEvent] = useState("");
   const [dlDate, setDlDate] = useState("");
   const [busy, setBusy] = useState(false);
+  const [tasks, setTasks] = useState<TaskRow[]>([]);
+  const [notes, setNotes] = useState<NoteRow[]>([]);
+  const [hearings, setHearings] = useState<HearingRow[]>([]);
+  const [taskTitle, setTaskTitle] = useState("");
+  const [taskDue, setTaskDue] = useState("");
+  const [noteChannel, setNoteChannel] = useState("OTHER");
+  const [noteWith, setNoteWith] = useState("");
+  const [noteContent, setNoteContent] = useState("");
+  const [hpProc, setHpProc] = useState("");
+  const [hTitle, setHTitle] = useState("");
+  const [hStarts, setHStarts] = useState("");
+  const [hRoom, setHRoom] = useState("");
+  const [hJudge, setHJudge] = useState("");
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
 
@@ -162,6 +187,18 @@ export function MatterDetail() {
         // Surface the failure — an empty card here could hide a lapsing freeze.
         if (active) setPresError(err instanceof Error ? err.message : String(err));
       });
+    setTasks([]);
+    setNotes([]);
+    setHearings([]);
+    api.listTasks(id).then((t) => {
+      if (active) setTasks(t);
+    }).catch(() => {});
+    api.listNotes(id).then((n) => {
+      if (active) setNotes(n);
+    }).catch(() => {});
+    api.listHearings(id).then((h) => {
+      if (active) setHearings(h);
+    }).catch(() => {});
     return () => {
       active = false;
     };
@@ -186,6 +223,89 @@ export function MatterDetail() {
       setPresError(null);
     } catch (err) {
       setPresError(err instanceof Error ? err.message : String(err));
+    }
+    try {
+      setTasks(await api.listTasks(id));
+    } catch { /* ignore */ }
+    try {
+      setNotes(await api.listNotes(id));
+    } catch { /* ignore */ }
+    try {
+      setHearings(await api.listHearings(id));
+    } catch { /* ignore */ }
+  }
+
+  async function addTask(e: FormEvent) {
+    e.preventDefault();
+    if (!taskTitle) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addTask(id, { title: taskTitle, dueAt: taskDue || undefined });
+      setTaskTitle("");
+      setTaskDue("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function doCompleteTask(taskId: string) {
+    setError(null);
+    try {
+      await api.completeTask(taskId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function addNote(e: FormEvent) {
+    e.preventDefault();
+    if (!noteContent) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addNote(id, {
+        content: noteContent,
+        channel: noteChannel,
+        withWhom: noteWith || undefined,
+      });
+      setNoteContent("");
+      setNoteWith("");
+      setNoteChannel("OTHER");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function addHearing(e: FormEvent) {
+    e.preventDefault();
+    if (!hpProc || !hTitle || !hStarts) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addHearing(hpProc, {
+        title: hTitle,
+        startsAt: hStarts,
+        room: hRoom || undefined,
+        judge: hJudge || undefined,
+      });
+      setHpProc("");
+      setHTitle("");
+      setHStarts("");
+      setHRoom("");
+      setHJudge("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
     }
   }
 
@@ -579,6 +699,182 @@ export function MatterDetail() {
           <p className="pt-1 text-[11px] text-muted-foreground">
             到期期限按财产类型自动推算（存款 1 年 / 动产 2 年 / 不动产·股权·知识产权 3 年），可手工覆盖。
           </p>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <ListChecks className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            任务
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {tasks.map((t) => (
+            <div
+              key={t.id}
+              className="flex items-center justify-between rounded-sm border border-border px-3 py-2.5"
+            >
+              <div className="min-w-0">
+                <span className={`text-sm font-medium ${t.completed ? "text-muted-foreground line-through" : ""}`}>
+                  {t.title}
+                </span>
+                {t.dueAt && (
+                  <span className="ml-2 text-xs text-muted-foreground">截止 {t.dueAt.slice(0, 10)}</span>
+                )}
+              </div>
+              {canEdit && !t.completed && (
+                <Button variant="ghost" size="sm" onClick={() => doCompleteTask(t.id)}>
+                  <Check className="mr-1 h-3.5 w-3.5" /> 完成
+                </Button>
+              )}
+            </div>
+          ))}
+          {tasks.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无任务</p>}
+
+          {canEdit && (
+            <form onSubmit={addTask} className="flex flex-wrap items-end gap-3 pt-2">
+              <div className="space-y-1.5">
+                <Label>任务</Label>
+                <Input
+                  value={taskTitle}
+                  onChange={(e) => setTaskTitle(e.target.value)}
+                  placeholder="任务标题"
+                  className="w-52"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>截止（可选）</Label>
+                <Input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} className="w-40" />
+              </div>
+              <Button type="submit" disabled={busy || !taskTitle}>
+                {busy ? "添加中…" : "添加任务"}
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <MessageSquare className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            沟通记录
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {notes.map((n) => (
+            <div key={n.id} className="rounded-sm border border-border px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <Badge variant="secondary" className="text-[10px]">{NOTE_CHANNEL_CN[n.channel] ?? n.channel}</Badge>
+                {n.withWhom && <span className="text-xs text-muted-foreground">{n.withWhom}</span>}
+                <span className="text-xs text-muted-foreground">{n.occurredAt.slice(0, 10)}</span>
+              </div>
+              <div className="mt-0.5 text-sm">{n.content}</div>
+            </div>
+          ))}
+          {notes.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无沟通记录</p>}
+
+          {canEdit && (
+            <form onSubmit={addNote} className="flex flex-wrap items-end gap-3 pt-2">
+              <div className="space-y-1.5">
+                <Label>方式</Label>
+                <Select value={noteChannel} onValueChange={setNoteChannel}>
+                  <SelectTrigger className="w-28">
+                    <SelectValue placeholder="选择" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(NOTE_CHANNEL_CN).map(([v, l]) => (
+                      <SelectItem key={v} value={v}>
+                        {l}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>对象（可选）</Label>
+                <Input value={noteWith} onChange={(e) => setNoteWith(e.target.value)} className="w-36" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>内容</Label>
+                <Input
+                  value={noteContent}
+                  onChange={(e) => setNoteContent(e.target.value)}
+                  placeholder="沟通内容"
+                  className="w-52"
+                />
+              </div>
+              <Button type="submit" disabled={busy || !noteContent}>
+                {busy ? "添加中…" : "添加沟通"}
+              </Button>
+            </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Gavel className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            开庭
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {hearings.map((h) => (
+            <div key={h.id} className="rounded-sm border border-border px-3 py-2.5">
+              <div className="flex items-center gap-2">
+                <span className="text-sm font-medium">{h.title}</span>
+                {h.room && <span className="text-xs text-muted-foreground">{h.room}</span>}
+                {h.judge && <span className="text-xs text-muted-foreground">{h.judge}</span>}
+              </div>
+              <div className="mt-0.5 text-xs text-muted-foreground">
+                {new Date(h.startsAt).toLocaleString("zh-CN")}
+              </div>
+            </div>
+          ))}
+          {hearings.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无开庭</p>}
+
+          {canEdit && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
+            <form onSubmit={addHearing} className="flex flex-wrap items-end gap-3 pt-2">
+              <div className="space-y-1.5">
+                <Label>程序</Label>
+                <Select value={hpProc} onValueChange={setHpProc}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="选择程序" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {matter.procedures
+                      .filter((p) => p.engagement === "ENGAGED")
+                      .map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {PROC_CN[p.type] ?? p.type}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>庭审标题</Label>
+                <Input value={hTitle} onChange={(e) => setHTitle(e.target.value)} className="w-44" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>开庭时间</Label>
+                <Input type="datetime-local" value={hStarts} onChange={(e) => setHStarts(e.target.value)} className="w-52" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>法庭（可选）</Label>
+                <Input value={hRoom} onChange={(e) => setHRoom(e.target.value)} className="w-32" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>法官（可选）</Label>
+                <Input value={hJudge} onChange={(e) => setHJudge(e.target.value)} className="w-32" />
+              </div>
+              <Button type="submit" disabled={busy || !hpProc || !hTitle || !hStarts}>
+                {busy ? "添加中…" : "添加开庭"}
+              </Button>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>

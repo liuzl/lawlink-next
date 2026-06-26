@@ -12,9 +12,16 @@ import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 import {
   addContact,
+  addHearing,
+  addNote,
   addProcedure,
+  addTask,
   applyDeadlineRules,
   completeDeadline,
+  completeTask,
+  listMatterHearings,
+  listMatterNotes,
+  listMatterTasks,
   convertIntake,
   createClient,
   createIntake,
@@ -214,6 +221,61 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
       await addProcedure(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/tasks", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterTasks(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/tasks", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await addTask(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/tasks/:id/complete", requireAuth, async (c) => {
+  try {
+    return c.json(await completeTask(buildDeps(), c.get("auth"), { taskId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/notes", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterNotes(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/matters/:id/notes", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await addNote(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/hearings", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterHearings(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await addHearing(buildDeps(), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }

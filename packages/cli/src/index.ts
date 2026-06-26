@@ -11,10 +11,17 @@ import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
   addContact,
+  addHearing,
+  addNote,
   addProcedure,
+  addTask,
   applyDeadlineRules,
   completeDeadline,
+  completeTask,
   convertIntake,
+  listMatterHearings,
+  listMatterNotes,
+  listMatterTasks,
   createClient,
   createIntake,
   createPreservation,
@@ -349,6 +356,63 @@ deadline
   .action((opts) =>
     run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
   );
+
+// ── task / note / hearing ─────────────────────────────────────────────────────
+const task = program.command("task").description("任务");
+task
+  .command("add")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--title <t>")
+  .option("--due-at <date>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => addTask(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, title: opts.title, dueAt: opts.dueAt })),
+  );
+task
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listMatterTasks(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
+task
+  .command("complete")
+  .requiredOption("--task-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => completeTask(buildDeps(), await resolveAuth(opts.token), { taskId: opts.taskId })));
+
+const note = program.command("note").description("沟通记录");
+note
+  .command("add")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--content <c>")
+  .option("--channel <ch>", "PHONE|WECHAT|EMAIL|MEETING|COURT|OTHER", "OTHER")
+  .option("--with-whom <w>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => addNote(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, content: opts.content, channel: opts.channel, withWhom: opts.withWhom })),
+  );
+note
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listMatterNotes(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
+
+const hearing = program.command("hearing").description("开庭");
+hearing
+  .command("add")
+  .requiredOption("--procedure-id <id>")
+  .requiredOption("--title <t>")
+  .requiredOption("--starts-at <datetime>", "如 2026-07-01T09:30")
+  .option("--room <r>")
+  .option("--judge <j>")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () => addHearing(buildDeps(), await resolveAuth(opts.token), { procedureId: opts.procedureId, title: opts.title, startsAt: opts.startsAt, room: opts.room, judge: opts.judge })),
+  );
+hearing
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => listMatterHearings(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })));
 
 // ── preservation ────────────────────────────────────────────────────────────
 const preservation = program.command("preservation").description("财产保全");

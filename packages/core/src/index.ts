@@ -9,3 +9,4 @@ export * from "./deadline/index.js";
 export * from "./preservation/index.js";
 export * from "./dashboard/index.js";
 export * from "./client/index.js";
+export * from "./activity/index.js";

@@ -166,6 +166,60 @@ export const deadlines = sqliteTable(
   ],
 );
 
+/** Task on a matter (跨程序通用任务, DOMAIN-SPEC §4.8). */
+export const tasks = sqliteTable(
+  "Task",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    title: text("title").notNull(),
+    description: text("description"),
+    assigneeId: text("assignee_id"),
+    dueAt: integer("due_at", { mode: "timestamp" }),
+    completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+    completedAt: integer("completed_at", { mode: "timestamp" }),
+    createdById: text("created_by_id").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Task_matter_idx").on(t.matterId, t.completed)],
+);
+
+/** Communication record (沟通记录, DOMAIN-SPEC §4.9). */
+export const notes = sqliteTable(
+  "Note",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    authorId: text("author_id").notNull(),
+    // PHONE | WECHAT | EMAIL | MEETING | COURT | OTHER
+    channel: text("channel").notNull().default("OTHER"),
+    withWhom: text("with_whom"),
+    occurredAt: integer("occurred_at", { mode: "timestamp" }).notNull(),
+    content: text("content").notNull(),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Note_matter_idx").on(t.matterId, t.occurredAt)],
+);
+
+/** Hearing on a procedure (开庭, DOMAIN-SPEC §4.8). */
+export const hearings = sqliteTable(
+  "Hearing",
+  {
+    id: text("id").primaryKey(),
+    procedureId: text("procedure_id").notNull(),
+    matterId: text("matter_id").notNull(),
+    title: text("title").notNull(),
+    room: text("room"),
+    address: text("address"),
+    judge: text("judge"),
+    startsAt: integer("starts_at", { mode: "timestamp" }).notNull(),
+    endsAt: integer("ends_at", { mode: "timestamp" }),
+    notes: text("notes"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Hearing_matter_idx").on(t.matterId, t.startsAt)],
+);
+
 /** Property preservation (财产保全) — expiry tracking + renewal (DOMAIN-SPEC §6.5, §9.2). */
 export const preservations = sqliteTable(
   "Preservation",
