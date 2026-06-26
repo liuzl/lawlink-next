@@ -79,12 +79,13 @@ export async function createSealRequest(deps: Deps, auth: AuthContext, rawInput:
   const input = CreateSealRequestInput.parse(rawInput);
 
   const draft = await loadDocument(deps, input.draftDocId);
-  // The draft's matter (if any) and the requested matter must agree; the
-  // requester must be able to access whichever matter is in play.
-  const matterId = input.matterId ?? draft.matterId ?? null;
-  if (input.matterId && draft.matterId && input.matterId !== draft.matterId) {
+  // Bind the seal to a matter via the draft. If the caller names a matter, the
+  // draft MUST belong to it (reject null/mismatch — no pulling a doc from another
+  // case). Otherwise the draft's own matter (if any) governs.
+  if (input.matterId && draft.matterId !== input.matterId) {
     throw new DomainError("VALIDATION", "待盖章稿不属于该案件");
   }
+  const matterId = input.matterId ?? draft.matterId ?? null;
   if (matterId) {
     const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
     if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
@@ -181,6 +182,7 @@ async function loadRequest(deps: Deps, id: string) {
       id: sealRequests.id,
       sealType: sealRequests.sealType,
       status: sealRequests.status,
+      matterId: sealRequests.matterId,
       requestedById: sealRequests.requestedById,
     })
     .from(sealRequests)
@@ -245,7 +247,13 @@ export async function stampSealRequest(deps: Deps, auth: AuthContext, rawInput: 
   const r = await loadRequest(deps, input.sealRequestId);
   // The seal holder (same authorization as the approver) records the stamping.
   await assertCanApprove(deps, auth, r.sealType as SealType);
-  await loadDocument(deps, input.stampedDocId); // 盖章后扫描件必补，必须为有效文件
+  const stampedDoc = await loadDocument(deps, input.stampedDocId); // 盖章后扫描件必补
+  // The official post-stamp record must belong to the SAME matter as the seal
+  // (a matter-less seal needs a matter-less scan) — fail closed, so a guessed
+  // Document id from an unrelated/inaccessible case can't be bound as the record.
+  if ((r.matterId ?? null) !== (stampedDoc.matterId ?? null)) {
+    throw new DomainError("VALIDATION", "盖章后扫描件须与本用印申请属于同一案件");
+  }
   try {
     await transition(
       deps,
@@ -303,17 +311,25 @@ export const ListSealRequestsInput = z.object({
   status: z.enum(["PENDING", "APPROVED", "STAMPED", "REJECTED", "CANCELLED"]).optional(),
 });
 
+/** Actionable states an approver may see for seals they can approve: PENDING
+ * (approve/reject) and APPROVED (stamp). Terminal history is NOT exposed via the
+ * approver queue — only the requester (own) and ADMIN see STAMPED/REJECTED/
+ * CANCELLED, so an approver can't trawl cross-matter seal history. */
+const QUEUE_STATES = ["PENDING", "APPROVED"] as const;
+
 export async function listSealRequests(deps: Deps, auth: AuthContext, rawInput?: unknown) {
   const input = ListSealRequestsInput.parse(rawInput ?? {});
-  // Visibility: own requests + the approval queue for seals this user can approve.
+  // Visibility: own requests (any status) + the actionable approval queue for
+  // seal types this user can approve.
   let visibility;
   if (auth.role === "ADMIN") {
-    visibility = undefined; // all
+    visibility = undefined; // firm-wide oversight
   } else {
     const types = await approverScope(deps, auth);
+    const own = eq(sealRequests.requestedById, auth.userId);
     visibility = types.length
-      ? or(eq(sealRequests.requestedById, auth.userId), inArray(sealRequests.sealType, types))
-      : eq(sealRequests.requestedById, auth.userId);
+      ? or(own, and(inArray(sealRequests.sealType, types), inArray(sealRequests.status, [...QUEUE_STATES])))
+      : own;
   }
   const statusFilter = input.status ? eq(sealRequests.status, input.status) : undefined;
   const where = and(visibility, statusFilter);
@@ -328,10 +344,13 @@ export async function listSealRequests(deps: Deps, auth: AuthContext, rawInput?:
 export async function getSealRequest(deps: Deps, auth: AuthContext, rawInput: { sealRequestId: string }) {
   const [r] = await deps.db.select().from(sealRequests).where(eq(sealRequests.id, rawInput.sealRequestId)).limit(1);
   if (!r) throw new DomainError("NOT_FOUND", "用印申请不存在");
-  // Visible to the requester, an eligible approver, or ADMIN.
+  // Same predicate as list: requester sees own (any status); an eligible approver
+  // sees only actionable (PENDING/APPROVED) seals of their type; ADMIN sees all.
   if (auth.role !== "ADMIN" && r.requestedById !== auth.userId) {
     const types = await approverScope(deps, auth);
-    if (!types.includes(r.sealType as SealType)) throw new DomainError("NOT_FOUND", "用印申请不存在");
+    const inQueue =
+      types.includes(r.sealType as SealType) && (QUEUE_STATES as readonly string[]).includes(r.status);
+    if (!inQueue) throw new DomainError("NOT_FOUND", "用印申请不存在");
   }
   return r;
 }
