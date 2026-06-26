@@ -9,6 +9,7 @@ import { randomUUID } from "node:crypto";
 import { ZodError } from "zod";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import type { Context, Next } from "hono";
 import {
   addContact,
@@ -522,14 +523,15 @@ app.post("/api/matters/:id/documents", requireAuth, async (c) => {
 });
 // Real-file upload (multipart/form-data: file + name/category/folderId fields).
 const MAX_UPLOAD_BYTES = 50 * 1024 * 1024;
-app.post("/api/matters/:id/documents/upload", requireAuth, async (c) => {
+// bodyLimit counts the ACTUAL streamed bytes (multipart slack over the 50MB file
+// cap) and aborts before the body is buffered — so a chunked request, or one with
+// a missing/forged Content-Length, can't force oversized buffering.
+const uploadBodyLimit = bodyLimit({
+  maxSize: MAX_UPLOAD_BYTES + 1024 * 1024,
+  onError: (c) => c.json({ error: "文件超过 50MB 上限" }, 413),
+});
+app.post("/api/matters/:id/documents/upload", uploadBodyLimit, requireAuth, async (c) => {
   try {
-    // Reject oversized bodies BEFORE buffering the multipart payload into memory.
-    // (Multipart adds overhead, so allow a little slack over the 50MB file cap.)
-    const len = Number(c.req.header("content-length") ?? 0);
-    if (len > MAX_UPLOAD_BYTES + 1024 * 1024) {
-      return c.json({ error: "文件超过 50MB 上限" }, 413);
-    }
     const form = await c.req.formData();
     const file = form.get("file");
     if (!(file instanceof File)) throw new DomainError("VALIDATION", "缺少上传文件");
