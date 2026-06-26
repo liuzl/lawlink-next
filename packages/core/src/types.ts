@@ -91,6 +91,20 @@ export type SmsType =
 /** How an SMS was matched to a matter. */
 export type SmsMatchSource = "AUTO_CASE_NUMBER" | "MANUAL" | "UNMATCHED";
 
+/** In-app notification kinds (通知中心). */
+export type NotificationType =
+  | "PRESERVATION_EXPIRY"
+  | "HEARING_REMINDER"
+  | "DEADLINE_REMINDER"
+  | "SEAL_STATUS_CHANGE"
+  | "SMS_ARRIVAL"
+  | "TASK_ASSIGNED"
+  | "ARCHIVE_APPROVED"
+  | "ARCHIVE_REJECTED"
+  | "SYSTEM";
+
+export type NotificationPriority = "LOW" | "NORMAL" | "HIGH" | "URGENT";
+
 /** The authenticated caller. Assembled by each entry shell (API/CLI) from a
  * verified token, never read implicitly from a request/session in the core. */
 export interface AuthContext {

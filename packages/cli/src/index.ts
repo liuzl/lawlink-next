@@ -54,6 +54,10 @@ import {
   listSettings,
   listUsers,
   getReport,
+  listNotifications,
+  unreadNotificationCount,
+  markNotificationRead,
+  markAllNotificationsRead,
   ingestSms,
   listSms,
   getSms,
@@ -495,9 +499,10 @@ task
   .requiredOption("--matter-id <id>")
   .requiredOption("--title <t>")
   .option("--due-at <date>")
+  .option("--assignee-id <id>", "指派给（用户 ID）")
   .option("--token <token>")
   .action((opts) =>
-    run(async () => addTask(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, title: opts.title, dueAt: opts.dueAt })),
+    run(async () => addTask(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId, title: opts.title, dueAt: opts.dueAt, assigneeId: opts.assigneeId })),
   );
 task
   .command("list")
@@ -711,6 +716,27 @@ settings
       return setSetting(buildDeps(), await resolveAuth(opts.token), { key: opts.key, value });
     }),
   );
+
+// ── notification (通知中心) ────────────────────────────────────────────────────
+const notify = program.command("notification").description("通知中心");
+notify
+  .command("list")
+  .option("--unread")
+  .option("--token <token>")
+  .action((opts) => run(async () => listNotifications(buildDeps(), await resolveAuth(opts.token), { unreadOnly: !!opts.unread })));
+notify
+  .command("unread-count")
+  .option("--token <token>")
+  .action((opts) => run(async () => unreadNotificationCount(buildDeps(), await resolveAuth(opts.token))));
+notify
+  .command("read")
+  .requiredOption("--id <id>")
+  .option("--token <token>")
+  .action((opts) => run(async () => markNotificationRead(buildDeps(), await resolveAuth(opts.token), { notificationId: opts.id })));
+notify
+  .command("read-all")
+  .option("--token <token>")
+  .action((opts) => run(async () => markAllNotificationsRead(buildDeps(), await resolveAuth(opts.token))));
 
 // ── report (报表) ──────────────────────────────────────────────────────────────
 program

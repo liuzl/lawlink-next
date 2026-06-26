@@ -12,6 +12,7 @@ import {
   Stamp,
   MessageSquareText,
   BarChart3,
+  Bell,
 } from "lucide-react";
 
 export type NavItem = {
@@ -37,6 +38,7 @@ export const primaryNav: NavItem[] = [
 ];
 
 export const secondaryNav: NavItem[] = [
+  { label: "通知", href: "/notifications", icon: Bell },
   { label: "报表", href: "/reports", icon: BarChart3 },
   { label: "审计", href: "/audit", icon: ScrollText },
   { label: "设置", href: "/settings", icon: Settings },

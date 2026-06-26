@@ -6,6 +6,7 @@ import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
+import { enqueueNotification } from "../notification/actions.js";
 import { DEFAULT_DURATION_DAYS, addDays, type PreservationPropertyType } from "./rules.js";
 
 async function assertCanEditMatter(db: Deps["db"], auth: AuthContext, matterId: string) {
@@ -222,7 +223,21 @@ export async function scanPreservationExpiry(deps: Deps): Promise<{ expired: num
         notInArray(preservations.matterId, archivedMatters),
       ),
     )
-    .returning({ id: preservations.id });
+    .returning({ id: preservations.id, ownerId: preservations.ownerId, matterId: preservations.matterId });
+  // Notify each preservation's owner that it has lapsed (best-effort; the
+  // dashboard already surfaces near-expiry — this is the day-of lapse alert).
+  for (const p of updated) {
+    if (!p.ownerId) continue;
+    await enqueueNotification(deps, {
+      userId: p.ownerId,
+      type: "PRESERVATION_EXPIRY",
+      priority: "HIGH",
+      title: "财产保全已到期失效",
+      href: p.matterId ? `/matters/${p.matterId}` : undefined,
+      refType: "Preservation",
+      refId: p.id,
+    });
+  }
   // This is an unattended system mutation of legal-preservation state — record
   // it under a SYSTEM actor when anything actually expired (empty scans are
   // silent to avoid log noise). The affected ids make the change reconstructable.

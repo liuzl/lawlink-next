@@ -248,6 +248,18 @@ export interface ReportData {
   };
   byLawyer: { userId: string; name: string; activeOwned: number; receivedInPeriod: string }[];
 }
+export interface NotificationRow {
+  id: string;
+  type: string;
+  priority: string;
+  title: string;
+  content: string | null;
+  href: string | null;
+  refType: string | null;
+  refId: string | null;
+  read: boolean;
+  createdAt: string;
+}
 export interface UserRow {
   id: string;
   name: string;
@@ -445,6 +457,13 @@ export const api = {
     req<{ deadlineId: string }>(`/sms/${id}/gen-deadline`, { method: "POST" }),
   markSmsProcessed: (id: string, processed = true) =>
     req<{ processed: boolean }>(`/sms/${id}/processed`, { method: "POST", body: JSON.stringify({ processed }) }),
+  listNotifications: (unread = false) =>
+    req<NotificationRow[]>(`/notifications${unread ? "?unread=true" : ""}`),
+  unreadCount: () => req<{ unread: number }>("/notifications/unread-count"),
+  markNotificationRead: (id: string) =>
+    req<{ read: boolean }>(`/notifications/${id}/read`, { method: "POST" }),
+  markAllNotificationsRead: () =>
+    req<{ marked: number }>("/notifications/read-all", { method: "POST" }),
   getReport: (params: { preset?: string; start?: string; end?: string } = {}) => {
     const q = new URLSearchParams();
     if (params.preset) q.set("preset", params.preset);

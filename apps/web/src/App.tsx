@@ -13,6 +13,7 @@ import { Seals } from "@/pages/Seals";
 import { Sms } from "@/pages/Sms";
 import { Audit } from "@/pages/Audit";
 import { Reports } from "@/pages/Reports";
+import { Notifications } from "@/pages/Notifications";
 import { Settings } from "@/pages/Settings";
 
 /** 认证门卫：无 token 跳登录，否则渲染外壳布局 */
@@ -36,6 +37,7 @@ export function App() {
         <Route path="/sms" element={<Sms />} />
         <Route path="/audit" element={<Audit />} />
         <Route path="/reports" element={<Reports />} />
+        <Route path="/notifications" element={<Notifications />} />
         <Route path="/settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

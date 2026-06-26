@@ -23,7 +23,29 @@ import {
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
 import { getFirmLegalRepUserId } from "../settings/actions.js";
+import { enqueueNotification } from "../notification/actions.js";
 import { SEAL_TYPES, approvableSealTypes, isSealType } from "./types.js";
+
+/** Notify the seal requester of a status change (skip if they acted themselves). */
+async function notifyRequester(
+  deps: Deps,
+  auth: AuthContext,
+  requestedById: string,
+  sealRequestId: string,
+  title: string,
+  priority: "NORMAL" | "HIGH",
+) {
+  if (requestedById === auth.userId) return;
+  await enqueueNotification(deps, {
+    userId: requestedById,
+    type: "SEAL_STATUS_CHANGE",
+    priority,
+    title,
+    href: "/seals",
+    refType: "SealRequest",
+    refId: sealRequestId,
+  });
+}
 
 const SEAL_TYPE = z.enum([
   "OFFICIAL_SEAL",
@@ -218,6 +240,7 @@ export async function approveSealRequest(deps: Deps, auth: AuthContext, rawInput
     targetId: input.sealRequestId,
     detail: { sealType: r.sealType },
   });
+  await notifyRequester(deps, auth, r.requestedById, input.sealRequestId, "用印申请已通过审批", "NORMAL");
   return { id: input.sealRequestId, status: "APPROVED" as const };
 }
 
@@ -238,6 +261,7 @@ export async function rejectSealRequest(deps: Deps, auth: AuthContext, rawInput:
     targetId: input.sealRequestId,
     detail: { sealType: r.sealType, hasNote: (input.approveNote?.length ?? 0) > 0 },
   });
+  await notifyRequester(deps, auth, r.requestedById, input.sealRequestId, "用印申请被驳回", "HIGH");
   return { id: input.sealRequestId, status: "REJECTED" as const };
 }
 
@@ -284,6 +308,7 @@ export async function stampSealRequest(deps: Deps, auth: AuthContext, rawInput: 
     targetId: input.sealRequestId,
     detail: { sealType: r.sealType },
   });
+  await notifyRequester(deps, auth, r.requestedById, input.sealRequestId, "用印已盖章完成", "NORMAL");
   return { id: input.sealRequestId, status: "STAMPED" as const };
 }
 

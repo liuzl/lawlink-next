@@ -55,6 +55,11 @@ import {
   listSettings,
   listUsers,
   getReport,
+  listNotifications,
+  unreadNotificationCount,
+  markNotificationRead,
+  markAllNotificationsRead,
+  markNotificationsRead,
   ingestSms,
   listSms,
   getSms,
@@ -543,6 +548,48 @@ app.post("/api/documents/:id/file", requireAuth, async (c) => {
 app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   try {
     return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+// ── notifications (通知中心) ────────────────────────────────────────────────────
+app.get("/api/notifications", requireAuth, async (c) => {
+  try {
+    return c.json(
+      await listNotifications(buildDeps(), c.get("auth"), {
+        unreadOnly: c.req.query("unread") === "true",
+        limit: c.req.query("limit"),
+      }),
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.get("/api/notifications/unread-count", requireAuth, async (c) => {
+  try {
+    return c.json(await unreadNotificationCount(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/notifications/read-all", requireAuth, async (c) => {
+  try {
+    return c.json(await markAllNotificationsRead(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/notifications/read", requireAuth, async (c) => {
+  try {
+    return c.json(await markNotificationsRead(buildDeps(), c.get("auth"), await c.req.json()));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+app.post("/api/notifications/:id/read", requireAuth, async (c) => {
+  try {
+    return c.json(await markNotificationRead(buildDeps(), c.get("auth"), { notificationId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

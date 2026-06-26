@@ -6,6 +6,7 @@ import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
+import { enqueueNotification } from "../notification/actions.js";
 
 /** Read access (archived matters are still viewable). */
 async function assertMatterReadable(db: Deps["db"], auth: AuthContext, matterId: string) {
@@ -64,6 +65,17 @@ export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) 
     targetId: id,
     detail: { matterId: input.matterId, hasDueAt: input.dueAt !== undefined },
   });
+  // Notify the assignee (unless they assigned it to themselves).
+  if (input.assigneeId && input.assigneeId !== auth.userId) {
+    await enqueueNotification(deps, {
+      userId: input.assigneeId,
+      type: "TASK_ASSIGNED",
+      title: `指派了任务：${input.title}`,
+      href: `/matters/${input.matterId}`,
+      refType: "Task",
+      refId: id,
+    });
+  }
   return { id, title: input.title };
 }
 
