@@ -14,9 +14,12 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 
+// Default MUST be OPPOSING_PARTY (matches core schema + CLI). Defaulting to
+// CLIENT_PARTY would score an existing-client-now-opponent as LOW instead of
+// BLOCKING — a conflict-risk downgrade.
 const QUERY_ROLES: { value: string; label: string }[] = [
-  { value: "CLIENT_PARTY", label: "拟委托方" },
   { value: "OPPOSING_PARTY", label: "相对方" },
+  { value: "CLIENT_PARTY", label: "拟委托方" },
   { value: "THIRD_PARTY", label: "第三人" },
 ];
 
