@@ -74,6 +74,25 @@ export async function createInvoiceRequest(deps: Deps, auth: AuthContext, rawInp
     if (missing) throw new DomainError("VALIDATION", "增值税专用发票须填写购方名称、税号、地址、电话、开户行、账号");
   }
   await assertDocsInMatter(deps, input.evidenceDocIds, input.matterId ?? null);
+  // Matterless invoice: there's no invoice matter to gate on, so the requester
+  // must still be able to access EACH evidence document's own matter — otherwise
+  // a LAWYER could embed another case's documents as 开票依据.
+  if (!input.matterId) {
+    const docRows = await deps.db
+      .select({ matterId: documents.matterId })
+      .from(documents)
+      .where(inArray(documents.id, input.evidenceDocIds));
+    const distinctMatters = [...new Set(docRows.map((d) => d.matterId).filter((x): x is string => !!x))];
+    if (distinctMatters.length) {
+      const ms = await deps.db.select({ id: matters.id, ownerId: matters.ownerId }).from(matters).where(inArray(matters.id, distinctMatters));
+      const byId = new Map(ms.map((m) => [m.id, m]));
+      for (const mid of distinctMatters) {
+        const m = byId.get(mid);
+        if (!m) throw new DomainError("NOT_FOUND", "开票依据文件不存在");
+        assertMatterAccess(m, auth); // throws NOT_FOUND if the requester can't access it
+      }
+    }
+  }
 
   const now = deps.clock.now();
   const id = deps.ids.newId();

@@ -109,8 +109,6 @@ export function Finance() {
   const [buyerPhone, setBuyerPhone] = useState("");
   const [buyerBank, setBuyerBank] = useState("");
   const [buyerBankAccount, setBuyerBankAccount] = useState("");
-  const [noMatterMode, setNoMatterMode] = useState(false);
-  const [noMatterReason, setNoMatterReason] = useState("");
   const [busy, setBusy] = useState(false);
 
   const [issuingId, setIssuingId] = useState<string | null>(null);
@@ -163,9 +161,7 @@ export function Finance() {
     setBusy(true);
     try {
       await api.createInvoice({
-        // 关联案件开票 sends matterId; 无关联案件 sends noMatterReason instead
-        // (the selected matter is used only to source the evidence document).
-        ...(noMatterMode ? { noMatterReason } : { matterId }),
+        matterId,
         amount,
         invoiceType,
         invoiceItem,
@@ -187,8 +183,6 @@ export function Finance() {
       setBuyerPhone("");
       setBuyerBank("");
       setBuyerBankAccount("");
-      setNoMatterMode(false);
-      setNoMatterReason("");
       await refreshInvoices();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -220,10 +214,7 @@ export function Finance() {
     }
   }
 
-  // The matter select always sources the evidence doc; in 无关联案件 mode a reason
-  // is required instead of binding the invoice to the matter.
-  const canSubmitInvoice =
-    !busy && !!matterId && !!evidenceDocId && !!amount && (!noMatterMode || !!noMatterReason.trim());
+  const canSubmitInvoice = !busy && !!matterId && !!evidenceDocId && !!amount;
 
   if (!canSeeInvoices) {
     return (
@@ -353,7 +344,7 @@ export function Finance() {
             className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 lg:items-end"
           >
             <div className="space-y-1.5">
-              <Label>{noMatterMode ? "依据来源案件" : "关联案件"}</Label>
+              <Label>关联案件</Label>
               <Select value={matterId} onValueChange={onMatterChange}>
                 <SelectTrigger>
                   <SelectValue placeholder="选择案件" />
@@ -366,22 +357,7 @@ export function Finance() {
                   ))}
                 </SelectContent>
               </Select>
-              <label className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
-                <input type="checkbox" checked={noMatterMode} onChange={(e) => setNoMatterMode(e.target.checked)} />
-                无关联案件开票（仅用所选案件挑选开票依据）
-              </label>
             </div>
-            {noMatterMode && (
-              <div className="space-y-1.5">
-                <Label htmlFor="invoice-nomatter-reason">无关联案件原因</Label>
-                <Input
-                  id="invoice-nomatter-reason"
-                  value={noMatterReason}
-                  onChange={(e) => setNoMatterReason(e.target.value)}
-                  placeholder="说明本次开票为何不关联案件"
-                />
-              </div>
-            )}
             <div className="space-y-1.5">
               <Label>开票依据</Label>
               <Select value={evidenceDocId} onValueChange={setEvidenceDocId}>
