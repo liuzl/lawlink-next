@@ -8,3 +8,4 @@ export * from "./procedure/index.js";
 export * from "./deadline/index.js";
 export * from "./preservation/index.js";
 export * from "./dashboard/index.js";
+export * from "./client/index.js";

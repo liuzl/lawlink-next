@@ -33,6 +33,44 @@ export const intakes = sqliteTable("Intake", {
   createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
 });
 
+/** Client (客户) — firm-level party master data (DOMAIN-SPEC §4.2). */
+export const clients = sqliteTable(
+  "Client",
+  {
+    id: text("id").primaryKey(),
+    name: text("name").notNull(),
+    // INDIVIDUAL | COMPANY | ORGANIZATION
+    type: text("type").notNull().default("INDIVIDUAL"),
+    idNumber: text("id_number"),
+    phone: text("phone"),
+    email: text("email"),
+    address: text("address"),
+    source: text("source"),
+    notes: text("notes"),
+    deletedAt: integer("deleted_at", { mode: "timestamp" }),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+    updatedAt: integer("updated_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Client_name_idx").on(t.name), index("Client_idnum_idx").on(t.idNumber)],
+);
+
+/** Contact of an (organization) client. */
+export const contacts = sqliteTable(
+  "Contact",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id").notNull(),
+    name: text("name").notNull(),
+    title: text("title"),
+    phone: text("phone"),
+    email: text("email"),
+    isPrimary: integer("is_primary", { mode: "boolean" }).notNull().default(false),
+    notes: text("notes"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [index("Contact_client_idx").on(t.clientId)],
+);
+
 export const matters = sqliteTable(
   "Matter",
   {

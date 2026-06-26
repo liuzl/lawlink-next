@@ -10,15 +10,19 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { Context, Next } from "hono";
 import {
+  addContact,
   addProcedure,
   applyDeadlineRules,
   completeDeadline,
   convertIntake,
+  createClient,
   createIntake,
   createPreservation,
   declineIntake,
+  getClient,
   getDashboard,
   getMatter,
+  listClients,
   liftPreservation,
   listIntakes,
   listMatterDeadlines,
@@ -144,6 +148,39 @@ app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
 app.post("/api/conflicts/check", requireAuth, async (c) => {
   try {
     return c.json(await runConflictCheck(buildDeps(), c.get("auth"), await c.req.json()));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/clients", requireAuth, async (c) => {
+  try {
+    return c.json(await listClients(buildDeps(), c.get("auth")));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/clients", requireAuth, async (c) => {
+  try {
+    return c.json(await createClient(buildDeps(), c.get("auth"), await c.req.json()), 201);
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/clients/:id", requireAuth, async (c) => {
+  try {
+    return c.json(await getClient(buildDeps(), c.get("auth"), { clientId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/clients/:id/contacts", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(await addContact(buildDeps(), c.get("auth"), { ...body, clientId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }

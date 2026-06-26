@@ -10,16 +10,20 @@
 import { randomUUID } from "node:crypto";
 import { Command } from "commander";
 import {
+  addContact,
   addProcedure,
   applyDeadlineRules,
   completeDeadline,
   convertIntake,
+  createClient,
   createIntake,
   createPreservation,
   declineIntake,
+  getClient,
   getDashboard,
   getMatter,
   hashPassword,
+  listClients,
   listMatterDeadlines,
   listMatterPreservations,
   listMatters,
@@ -220,6 +224,58 @@ program
   .description("工作台聚合（近期到期等）")
   .option("--token <token>", "登录态")
   .action((opts) => run(async () => getDashboard(buildDeps(), await resolveAuth(opts.token))));
+
+// ── client ──────────────────────────────────────────────────────────────────
+const client = program.command("client").description("客户 / 联系人");
+
+client
+  .command("create")
+  .requiredOption("--name <name>")
+  .option("--type <t>", "INDIVIDUAL|COMPANY|ORGANIZATION", "INDIVIDUAL")
+  .option("--id-number <id>", "身份证 / 统一社会信用代码")
+  .option("--phone <p>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      createClient(buildDeps(), await resolveAuth(opts.token), {
+        name: opts.name,
+        type: opts.type,
+        idNumber: opts.idNumber,
+        phone: opts.phone,
+      }),
+    ),
+  );
+
+client
+  .command("list")
+  .option("--token <token>", "登录态")
+  .action((opts) => run(async () => listClients(buildDeps(), await resolveAuth(opts.token))));
+
+client
+  .command("show")
+  .requiredOption("--client-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => getClient(buildDeps(), await resolveAuth(opts.token), { clientId: opts.clientId })),
+  );
+
+client
+  .command("add-contact")
+  .requiredOption("--client-id <id>")
+  .requiredOption("--name <name>")
+  .option("--title <t>")
+  .option("--phone <p>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      addContact(buildDeps(), await resolveAuth(opts.token), {
+        clientId: opts.clientId,
+        name: opts.name,
+        title: opts.title,
+        phone: opts.phone,
+      }),
+    ),
+  );
 
 // ── matter ──────────────────────────────────────────────────────────────────
 const matter = program.command("matter").description("案件 / 程序");

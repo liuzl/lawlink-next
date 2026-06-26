@@ -7,6 +7,8 @@ import { Intakes } from "@/pages/Intakes";
 import { Conflicts } from "@/pages/Conflicts";
 import { Matters } from "@/pages/Matters";
 import { MatterDetail } from "@/pages/MatterDetail";
+import { Clients } from "@/pages/Clients";
+import { ClientDetail } from "@/pages/ClientDetail";
 
 /** 认证门卫：无 token 跳登录，否则渲染外壳布局 */
 function RequireAuth() {
@@ -23,6 +25,8 @@ export function App() {
         <Route path="/conflicts" element={<Conflicts />} />
         <Route path="/matters" element={<Matters />} />
         <Route path="/matters/:id" element={<MatterDetail />} />
+        <Route path="/clients" element={<Clients />} />
+        <Route path="/clients/:id" element={<ClientDetail />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

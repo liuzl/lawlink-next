@@ -142,6 +142,26 @@ export interface DashboardData {
   expiringPreservations: DashPreservation[];
   horizonDays: number;
 }
+export interface ClientRow {
+  id: string;
+  name: string;
+  type: string;
+  idNumber: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+}
+export interface ClientContact {
+  id: string;
+  name: string;
+  title: string | null;
+  phone: string | null;
+  email: string | null;
+  isPrimary: boolean;
+}
+export interface ClientDetail extends ClientRow {
+  contacts: ClientContact[];
+}
 
 export const api = {
   login: (email: string, password: string) =>
@@ -150,6 +170,12 @@ export const api = {
       body: JSON.stringify({ email, password }),
     }),
   getDashboard: () => req<DashboardData>("/dashboard"),
+  listClients: () => req<ClientRow[]>("/clients"),
+  getClient: (id: string) => req<ClientDetail>(`/clients/${id}`),
+  createClient: (body: Record<string, unknown>) =>
+    req<{ id: string }>("/clients", { method: "POST", body: JSON.stringify(body) }),
+  addContact: (id: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/clients/${id}/contacts`, { method: "POST", body: JSON.stringify(body) }),
   listIntakes: () => req<IntakeRow[]>("/intakes"),
   createIntake: (body: Record<string, unknown>) =>
     req<IntakeRow>("/intakes", { method: "POST", body: JSON.stringify(body) }),
