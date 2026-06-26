@@ -1,6 +1,6 @@
 /** Deadline use cases (DOMAIN-SPEC §6.4, §9.1). */
 import { z } from "zod";
-import { and, asc, eq, getTableColumns } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, notInArray } from "drizzle-orm";
 import { deadlines, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -101,6 +101,18 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
         });
       }
     }
+
+    // Prune obsolete auto deadlines: categories no longer produced by the rules
+    // (e.g. a corrected JUDGMENT_EFFECTIVE that no longer emits ENFORCEMENT).
+    const keep = computed.map((d) => d.category);
+    await tx.delete(deadlines).where(
+      and(
+        eq(deadlines.procedureId, input.procedureId),
+        eq(deadlines.autoComputed, true),
+        eq(deadlines.sourceEvent, input.event),
+        keep.length > 0 ? notInArray(deadlines.category, keep) : undefined,
+      ),
+    );
 
     return { procedureId: input.procedureId, event: input.event, created: computed.length, deadlines: computed };
   });
