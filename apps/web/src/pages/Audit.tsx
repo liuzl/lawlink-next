@@ -13,6 +13,7 @@ import {
 
 const ACTION_CN: Record<string, string> = {
   LOGIN: "登录",
+  USER_SEED: "初始化账号",
   INTAKE_CREATE: "新建收案",
   INTAKE_CONVERT: "转正式案件",
   INTAKE_DECLINE: "不接案",

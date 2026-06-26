@@ -135,6 +135,15 @@ db.command("seed")
         })),
       );
       await deps.db.insert(users).values(rows);
+      // Provisioning privileged identities (incl. the default admin) is itself
+      // an audit-worthy event — record it under a SYSTEM actor. No passwords or
+      // hashes in the detail, only id/email/role.
+      for (const r of rows) {
+        await deps.audit.record(
+          { userId: "system" },
+          { action: "USER_SEED", targetType: "User", targetId: r.id, detail: { email: r.email, role: r.role } },
+        );
+      }
       return { seeded: accounts.map((a) => ({ email: a.email, role: a.role })) };
     }),
   );
