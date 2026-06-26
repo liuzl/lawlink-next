@@ -182,6 +182,34 @@ export interface HearingRow {
   room: string | null;
   judge: string | null;
 }
+export interface FeeEntryRow {
+  id: string;
+  type: string;
+  amount: string;
+  occurredAt: string;
+  payerOrPayee: string | null;
+  note: string | null;
+  parentFeeEntryId: string | null;
+  beneficiaryUserId: string | null;
+}
+export interface CommissionPlanRow {
+  id: string;
+  userId: string;
+  percent: string;
+  label: string | null;
+}
+export interface FinanceData {
+  entries: FeeEntryRow[];
+  plan: CommissionPlanRow[];
+  summary: {
+    receivable: string;
+    received: string;
+    refund: string;
+    cost: string;
+    commission: string;
+    netReceived: string;
+  };
+}
 
 export const api = {
   login: (email: string, password: string) =>
@@ -244,4 +272,13 @@ export const api = {
   listHearings: (matterId: string) => req<HearingRow[]>(`/matters/${matterId}/hearings`),
   addHearing: (procedureId: string, body: Record<string, unknown>) =>
     req<{ id: string }>(`/procedures/${procedureId}/hearings`, { method: "POST", body: JSON.stringify(body) }),
+  getFinance: (matterId: string) => req<FinanceData>(`/matters/${matterId}/finance`),
+  addFeeEntry: (matterId: string, body: Record<string, unknown>) =>
+    req<{ id: string }>(`/matters/${matterId}/fee-entries`, { method: "POST", body: JSON.stringify(body) }),
+  deleteFeeEntry: (id: string) => req<{ deleted: boolean }>(`/fee-entries/${id}/delete`, { method: "POST" }),
+  setCommissionPlan: (matterId: string, plans: { userId: string; percent: number; label?: string }[]) =>
+    req<{ count: number }>(`/matters/${matterId}/commission-plan`, {
+      method: "POST",
+      body: JSON.stringify({ plans }),
+    }),
 };

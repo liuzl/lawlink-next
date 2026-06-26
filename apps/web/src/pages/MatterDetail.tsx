@@ -1,10 +1,11 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
+import { Banknote, CalendarClock, Check, ChevronLeft, Gavel, ListChecks, MessageSquare, Snowflake } from "lucide-react";
 import {
   api,
   getRole,
   type DeadlineRow,
+  type FinanceData,
   type HearingRow,
   type MatterDetail as MatterDetailData,
   type NoteRow,
@@ -92,6 +93,21 @@ const PRES_STATUS_CN: Record<string, string> = {
   LIFTED: "已解除",
 };
 
+const FEE_TYPE_CN: Record<string, string> = {
+  RECEIVABLE: "应收",
+  RECEIVED: "实收",
+  REFUND: "退款",
+  COST: "成本",
+  COMMISSION: "分成",
+};
+// Types selectable in the add-entry form (COMMISSION rows are auto-generated).
+const FEE_TYPE_OPTIONS: { value: string; label: string }[] = [
+  { value: "RECEIVABLE", label: "应收" },
+  { value: "RECEIVED", label: "实收" },
+  { value: "REFUND", label: "退款" },
+  { value: "COST", label: "成本" },
+];
+
 const NOTE_CHANNEL_CN: Record<string, string> = {
   PHONE: "电话",
   WECHAT: "微信",
@@ -144,6 +160,10 @@ export function MatterDetail() {
   const [hStarts, setHStarts] = useState("");
   const [hRoom, setHRoom] = useState("");
   const [hJudge, setHJudge] = useState("");
+  const [finance, setFinance] = useState<FinanceData | null>(null);
+  const [feeType, setFeeType] = useState("RECEIVED");
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feePayer, setFeePayer] = useState("");
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
 
@@ -199,6 +219,10 @@ export function MatterDetail() {
     api.listHearings(id).then((h) => {
       if (active) setHearings(h);
     }).catch(() => {});
+    setFinance(null);
+    api.getFinance(id).then((f) => {
+      if (active) setFinance(f);
+    }).catch(() => {});
     return () => {
       active = false;
     };
@@ -232,6 +256,9 @@ export function MatterDetail() {
     } catch { /* ignore */ }
     try {
       setHearings(await api.listHearings(id));
+    } catch { /* ignore */ }
+    try {
+      setFinance(await api.getFinance(id));
     } catch { /* ignore */ }
   }
 
@@ -308,6 +335,38 @@ export function MatterDetail() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function addFee(e: FormEvent) {
+    e.preventDefault();
+    if (!feeAmount) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.addFeeEntry(id, {
+        type: feeType,
+        amount: feeAmount,
+        payerOrPayee: feePayer || undefined,
+      });
+      setFeeType("RECEIVED");
+      setFeeAmount("");
+      setFeePayer("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function deleteFee(feeId: string) {
+    setError(null);
+    try {
+      await api.deleteFeeEntry(feeId);
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -876,6 +935,113 @@ export function MatterDetail() {
                 {busy ? "添加中…" : "添加开庭"}
               </Button>
             </form>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <Banknote className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            财务
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {finance && (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                {([
+                  { label: "应收", value: finance.summary.receivable },
+                  { label: "实收", value: finance.summary.received },
+                  { label: "退款", value: finance.summary.refund },
+                  { label: "成本", value: finance.summary.cost },
+                  { label: "分成", value: finance.summary.commission },
+                  { label: "净实收", value: finance.summary.netReceived },
+                ] as const).map((s) => (
+                  <div key={s.label} className="rounded-sm border border-border px-3 py-2">
+                    <div className="text-[11px] text-muted-foreground">{s.label}</div>
+                    <div className="ll-stat text-sm">¥{s.value}</div>
+                  </div>
+                ))}
+              </div>
+
+              {finance.plan.length > 0 && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="text-xs text-muted-foreground">分成方案</span>
+                  {finance.plan.map((p) => (
+                    <span key={p.id} className="ll-chip">
+                      {p.label || p.userId.slice(0, 8)} {p.percent}%
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="space-y-2">
+                {finance.entries.map((entry) => {
+                  const isCommission = entry.type === "COMMISSION";
+                  const muted = isCommission || entry.type === "REFUND" || entry.amount.startsWith("-");
+                  return (
+                    <div
+                      key={entry.id}
+                      className={`flex items-center justify-between rounded-sm border border-border px-3 py-2.5 ${isCommission ? "ml-4" : ""}`}
+                    >
+                      <div className="flex min-w-0 flex-wrap items-center gap-2">
+                        <Badge variant="secondary" className="text-[10px]">{FEE_TYPE_CN[entry.type] ?? entry.type}</Badge>
+                        {isCommission && <Badge variant="secondary" className="text-[10px]">自动分成</Badge>}
+                        <span className={`ll-stat text-sm ${muted ? "text-destructive" : ""}`}>¥{entry.amount}</span>
+                        <span className="text-xs text-muted-foreground">{entry.occurredAt.slice(0, 10)}</span>
+                        {entry.payerOrPayee && <span className="text-xs text-muted-foreground">{entry.payerOrPayee}</span>}
+                        {entry.note && <span className="text-xs text-muted-foreground">{entry.note}</span>}
+                      </div>
+                      {!isCommission && canEdit && (
+                        <Button variant="ghost" size="sm" onClick={() => deleteFee(entry.id)}>
+                          删除
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })}
+                {finance.entries.length === 0 && (
+                  <p className="py-2 text-xs text-muted-foreground">尚无财务记录</p>
+                )}
+              </div>
+
+              {canEdit && (
+                <form onSubmit={addFee} className="flex flex-wrap items-end gap-3 pt-2">
+                  <div className="space-y-1.5">
+                    <Label>类型</Label>
+                    <Select value={feeType} onValueChange={setFeeType}>
+                      <SelectTrigger className="w-28">
+                        <SelectValue placeholder="选择" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {FEE_TYPE_OPTIONS.map((t) => (
+                          <SelectItem key={t.value} value={t.value}>
+                            {t.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>金额</Label>
+                    <Input
+                      value={feeAmount}
+                      onChange={(e) => setFeeAmount(e.target.value)}
+                      placeholder="0.00"
+                      className="w-32"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>付款方/收款方（可选）</Label>
+                    <Input value={feePayer} onChange={(e) => setFeePayer(e.target.value)} className="w-40" />
+                  </div>
+                  <Button type="submit" disabled={busy || !feeAmount}>
+                    {busy ? "记账中…" : "记一笔"}
+                  </Button>
+                </form>
+              )}
+            </>
           )}
         </CardContent>
       </Card>
