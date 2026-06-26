@@ -117,6 +117,9 @@ export interface AuditEntry {
 }
 export interface AuditSink {
   record(actor: { userId: string }, entry: AuditEntry): Promise<void>;
+  /** Return a sink bound to a different db handle (e.g. a transaction) while
+   * preserving request context (ip/userAgent). Optional: noop sinks omit it. */
+  withDb?(db: Database): AuditSink;
 }
 
 export interface Secrets {

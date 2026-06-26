@@ -49,6 +49,12 @@ export function createAuditSink(
         );
       }
     },
+    // Rebind to another db handle (e.g. a transaction) keeping the SAME ctx, so
+    // audit rows written through a nested transactional use case still carry the
+    // request's ip/userAgent.
+    withDb(newDb) {
+      return createAuditSink(newDb, ids, clock, ctx);
+    },
   };
 }
 

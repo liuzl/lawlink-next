@@ -26,7 +26,10 @@ import { parseSms, toDate, type ParsedSms } from "./parser.js";
  * batch(), so the cast is safe at runtime. */
 function txDepsFor(deps: Deps, tx: unknown): Deps {
   const db = tx as Deps["db"];
-  return { ...deps, db, audit: createAuditSink(db, deps.ids, deps.clock) };
+  // Preserve request audit context (ip/userAgent) on the tx-bound sink, falling
+  // back to a fresh sink only for sinks without withDb (e.g. the noop sink).
+  const audit = deps.audit.withDb ? deps.audit.withDb(db) : createAuditSink(db, deps.ids, deps.clock);
+  return { ...deps, db, audit };
 }
 
 /** Add N calendar days to a date (local), preserving time. */
@@ -158,6 +161,12 @@ export async function assignSmsMatter(deps: Deps, auth: AuthContext, rawInput: u
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = AssignSmsInput.parse(rawInput);
   const r = await visibleSms(deps, auth, input.smsId);
+  // Once a hearing/deadline was generated from this SMS, its matchedMatterId is
+  // the case those records live on — re-pointing it would make the back-reference
+  // lie. Block reassignment after generation.
+  if (r.generatedHearingId || r.generatedDeadlineId) {
+    throw new DomainError("INVALID_STATE", "该短信已生成开庭/期限，不能再改派案件");
+  }
   const [m] = await deps.db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, input.matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(m, auth);
@@ -232,6 +241,7 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   const input = GenerateHearingInput.parse(rawInput);
   const r = await visibleSms(deps, auth, input.smsId);
   if (!r.matchedMatterId) throw new DomainError("INVALID_STATE", "短信未关联案件，请先匹配案件");
+  const matchedMatterId = r.matchedMatterId; // narrowed; pinned into the claim predicate
   const parsed = rowWithParsed(r).parsed;
   if (!parsed) throw new DomainError("INVALID_STATE", "短信解析结果缺失");
 
@@ -250,12 +260,23 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   const now = deps.clock.now();
   const hearing = await deps.db.transaction(async (tx) => {
     const txDeps = txDepsFor(deps, tx);
+    // Claim also pins matchedMatterId to the value we resolved the procedure
+    // against, so a concurrent assignSmsMatter (which changes matchedMatterId)
+    // can't let us land a hearing on the old matter while the SMS now points
+    // elsewhere — the claim simply matches 0 rows and the caller retries.
     const claimed = await tx
       .update(smsMessages)
       .set({ processed: true, processedAt: now, updatedAt: now })
-      .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedHearingId)))
+      .where(
+        and(
+          eq(smsMessages.id, r.id),
+          eq(smsMessages.processed, false),
+          isNull(smsMessages.generatedHearingId),
+          eq(smsMessages.matchedMatterId, matchedMatterId),
+        ),
+      )
       .returning({ id: smsMessages.id });
-    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成开庭，无法重复生成");
+    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理、已生成开庭或关联案件已变更，无法生成");
     const h = await addHearing(txDeps, auth, {
       procedureId,
       title: input.title ?? `开庭（${parsed.court ?? "法院"}）`,
@@ -291,6 +312,7 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   const input = GenerateDeadlineInput.parse(rawInput);
   const r = await visibleSms(deps, auth, input.smsId);
   if (!r.matchedMatterId) throw new DomainError("INVALID_STATE", "短信未关联案件，请先匹配案件");
+  const matchedMatterId = r.matchedMatterId; // narrowed; pinned into the claim predicate
   const parsed = rowWithParsed(r).parsed;
   if (!parsed) throw new DomainError("INVALID_STATE", "短信解析结果缺失");
 
@@ -313,9 +335,16 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
     const claimed = await tx
       .update(smsMessages)
       .set({ processed: true, processedAt: now, updatedAt: now })
-      .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedDeadlineId)))
+      .where(
+        and(
+          eq(smsMessages.id, r.id),
+          eq(smsMessages.processed, false),
+          isNull(smsMessages.generatedDeadlineId),
+          eq(smsMessages.matchedMatterId, matchedMatterId),
+        ),
+      )
       .returning({ id: smsMessages.id });
-    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成期限，无法重复生成");
+    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理、已生成期限或关联案件已变更，无法生成");
     const dl = await addDeadline(txDeps, auth, {
       procedureId,
       title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
