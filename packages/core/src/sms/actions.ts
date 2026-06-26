@@ -17,7 +17,17 @@ import { assertMatterAccess } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 import { addHearing } from "../activity/actions.js";
 import { addDeadline } from "../deadline/actions.js";
+import { createAuditSink } from "../audit/sink.js";
 import { parseSms, toDate, type ParsedSms } from "./parser.js";
+
+/** Bind deps to a transaction handle: the db AND a tx-scoped audit sink, so a
+ * nested use case's writes (incl. its audit row) all land in the same txn and
+ * roll back together. addHearing/addDeadline open no nested txn and never call
+ * batch(), so the cast is safe at runtime. */
+function txDepsFor(deps: Deps, tx: unknown): Deps {
+  const db = tx as Deps["db"];
+  return { ...deps, db, audit: createAuditSink(db, deps.ids, deps.clock) };
+}
 
 /** Add N calendar days to a date (local), preserving time. */
 function addDays(base: Date, n: number): Date {
@@ -230,47 +240,32 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
   await assertGeneratableProcedure(deps, auth, procedureId); // all addHearing preconditions, pre-claim
 
-  // Atomically CLAIM the SMS before creating anything: flip processed false→true
-  // in one guarded statement. A re-click or concurrent request matches 0 rows and
-  // bails — so one SMS spawns at most one generated record (no duplicates). All
-  // validation above ran first, so a failed validation never wrongly marks it
-  // processed. (If addHearing below fails, the SMS is processed with no hearing —
-  // recoverable via markSmsProcessed undo; still no duplicate.)
-  // Claim requires BOTH processed=false AND no hearing yet, so manually
-  // un-processing a generated SMS (markSmsProcessed undo leaves generatedHearingId
-  // set) can't reopen it for a duplicate hearing.
+  // Claim + create + back-reference in ONE transaction, so there is no window in
+  // which a hearing exists while the SMS link is still NULL. The claim requires
+  // processed=false AND no hearing yet (re-click / concurrent / undo→regenerate
+  // all match 0 rows and bail → never a duplicate); if addHearing throws inside
+  // the txn (e.g. matter archived in the race window) the whole thing rolls back,
+  // leaving the SMS unprocessed and retryable. addHearing runs against the txn's
+  // db handle; it opens no nested transaction and never calls batch().
   const now = deps.clock.now();
-  const claimed = await deps.db
-    .update(smsMessages)
-    .set({ processed: true, processedAt: now, updatedAt: now })
-    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedHearingId)))
-    .returning({ id: smsMessages.id });
-  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成开庭，无法重复生成");
-
-  // addHearing enforces matter write access + audits; we just thread the data.
-  // If it throws (e.g. the matter was archived in the race window AFTER our
-  // preflight), roll the claim back so the SMS is retryable — but only while no
-  // generated id was written, so a success is never un-processed.
-  let hearing: { id: string };
-  try {
-    hearing = await addHearing(deps, auth, {
+  const hearing = await deps.db.transaction(async (tx) => {
+    const txDeps = txDepsFor(deps, tx);
+    const claimed = await tx
+      .update(smsMessages)
+      .set({ processed: true, processedAt: now, updatedAt: now })
+      .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedHearingId)))
+      .returning({ id: smsMessages.id });
+    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成开庭，无法重复生成");
+    const h = await addHearing(txDeps, auth, {
       procedureId,
       title: input.title ?? `开庭（${parsed.court ?? "法院"}）`,
       startsAt,
       room: parsed.courtRoom ?? undefined,
       judge: parsed.judge ?? undefined,
     });
-  } catch (err) {
-    await deps.db
-      .update(smsMessages)
-      .set({ processed: false, processedAt: null, updatedAt: deps.clock.now() })
-      .where(and(eq(smsMessages.id, r.id), isNull(smsMessages.generatedHearingId)));
-    throw err;
-  }
-  await deps.db
-    .update(smsMessages)
-    .set({ generatedHearingId: hearing.id, updatedAt: deps.clock.now() })
-    .where(eq(smsMessages.id, r.id));
+    await tx.update(smsMessages).set({ generatedHearingId: h.id, updatedAt: now }).where(eq(smsMessages.id, r.id));
+    return h;
+  });
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_HEARING",
     targetType: "SmsMessage",
@@ -309,38 +304,28 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
   await assertGeneratableProcedure(deps, auth, procedureId); // all addDeadline preconditions, pre-claim
 
-  // Atomic claim before creating — requires processed=false AND no deadline yet,
-  // so un-processing a generated SMS can't reopen it for a duplicate deadline.
+  // Claim + create + back-reference in ONE transaction (see gen-hearing): no
+  // window where a deadline exists while the SMS link is NULL; claim requires
+  // processed=false AND no deadline yet; a throw rolls the whole thing back.
   const now = deps.clock.now();
-  const claimed = await deps.db
-    .update(smsMessages)
-    .set({ processed: true, processedAt: now, updatedAt: now })
-    .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedDeadlineId)))
-    .returning({ id: smsMessages.id });
-  if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成期限，无法重复生成");
-
-  // Roll the claim back if creation throws in the race window — same retryable
-  // guard as gen-hearing (only while no generated id was written).
-  let deadline: { id: string };
-  try {
-    deadline = await addDeadline(deps, auth, {
+  const deadline = await deps.db.transaction(async (tx) => {
+    const txDeps = txDepsFor(deps, tx);
+    const claimed = await tx
+      .update(smsMessages)
+      .set({ processed: true, processedAt: now, updatedAt: now })
+      .where(and(eq(smsMessages.id, r.id), eq(smsMessages.processed, false), isNull(smsMessages.generatedDeadlineId)))
+      .returning({ id: smsMessages.id });
+    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理或已生成期限，无法重复生成");
+    const dl = await addDeadline(txDeps, auth, {
       procedureId,
       title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
       dueAt,
       category: input.category ?? "CUSTOM",
       basis: parsed.summary,
     });
-  } catch (err) {
-    await deps.db
-      .update(smsMessages)
-      .set({ processed: false, processedAt: null, updatedAt: deps.clock.now() })
-      .where(and(eq(smsMessages.id, r.id), isNull(smsMessages.generatedDeadlineId)));
-    throw err;
-  }
-  await deps.db
-    .update(smsMessages)
-    .set({ generatedDeadlineId: deadline.id, updatedAt: deps.clock.now() })
-    .where(eq(smsMessages.id, r.id));
+    await tx.update(smsMessages).set({ generatedDeadlineId: dl.id, updatedAt: now }).where(eq(smsMessages.id, r.id));
+    return dl;
+  });
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_DEADLINE",
     targetType: "SmsMessage",
