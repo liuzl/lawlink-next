@@ -1,6 +1,6 @@
 /** Deadline use cases (DOMAIN-SPEC §6.4, §9.1). */
 import { z } from "zod";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, getTableColumns } from "drizzle-orm";
 import { deadlines, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -9,18 +9,22 @@ import { computeDeadlines, type DeadlineEvent } from "./rules.js";
 
 type Tx = Parameters<Parameters<Deps["db"]["transaction"]>[0]>[0];
 
-/** Load a procedure's matter (category + owner) and assert the caller may edit it. */
+/** Load a procedure's matter (category + owner), assert the caller may edit it,
+ * and reject INFORMATIONAL procedures (metadata-only, never in aggregates §3.2). */
 async function authorizedMatterOfProcedure(
   db: Deps["db"] | Tx,
   auth: AuthContext,
   procedureId: string,
 ): Promise<{ matterId: string; category: MatterCategory }> {
   const [proc] = await db
-    .select({ matterId: matterProcedures.matterId })
+    .select({ matterId: matterProcedures.matterId, engagement: matterProcedures.engagement })
     .from(matterProcedures)
     .where(eq(matterProcedures.id, procedureId))
     .limit(1);
   if (!proc) throw new DomainError("NOT_FOUND", "程序不存在");
+  if (proc.engagement === "INFORMATIONAL") {
+    throw new DomainError("VALIDATION", "前序参考程序仅作元数据，不进入期限聚合，不能添加/推算期限");
+  }
 
   const [matter] = await db
     .select({ category: matters.category, ownerId: matters.ownerId })
@@ -58,20 +62,31 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
     const { matterId, category } = await authorizedMatterOfProcedure(tx, auth, input.procedureId);
     const computed = computeDeadlines(category, input.event as DeadlineEvent, input.eventDate);
 
-    // Idempotent: drop any previous auto deadlines for this procedure+event.
-    await tx
-      .delete(deadlines)
-      .where(
-        and(
-          eq(deadlines.procedureId, input.procedureId),
-          eq(deadlines.autoComputed, true),
-          eq(deadlines.sourceEvent, input.event),
-        ),
-      );
+    // Idempotent UPSERT by natural key (procedure, event, category): update the
+    // due date/basis of an existing auto row IN PLACE — preserving its id and
+    // completed/completedAt — instead of deleting + recreating (which would wipe
+    // a lawyer's "已完成" mark and break reminder/audit references).
+    for (const d of computed) {
+      const [existing] = await tx
+        .select({ id: deadlines.id })
+        .from(deadlines)
+        .where(
+          and(
+            eq(deadlines.procedureId, input.procedureId),
+            eq(deadlines.autoComputed, true),
+            eq(deadlines.sourceEvent, input.event),
+            eq(deadlines.category, d.category),
+          ),
+        )
+        .limit(1);
 
-    if (computed.length > 0) {
-      await tx.insert(deadlines).values(
-        computed.map((d) => ({
+      if (existing) {
+        await tx
+          .update(deadlines)
+          .set({ title: d.title, dueAt: d.dueAt, basis: d.basis })
+          .where(eq(deadlines.id, existing.id));
+      } else {
+        await tx.insert(deadlines).values({
           id: deps.ids.newId(),
           procedureId: input.procedureId,
           matterId,
@@ -83,8 +98,8 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
           autoComputed: true,
           completed: false,
           createdAt: now,
-        })),
-      );
+        });
+      }
     }
 
     return { procedureId: input.procedureId, event: input.event, created: computed.length, deadlines: computed };
@@ -136,10 +151,14 @@ export async function listMatterDeadlines(
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(matter, auth);
 
+  // Only ENGAGED procedures' deadlines enter aggregates (DOMAIN-SPEC §3.2).
   return await deps.db
-    .select()
+    .select(getTableColumns(deadlines))
     .from(deadlines)
-    .where(eq(deadlines.matterId, rawInput.matterId))
+    .innerJoin(matterProcedures, eq(deadlines.procedureId, matterProcedures.id))
+    .where(
+      and(eq(deadlines.matterId, rawInput.matterId), eq(matterProcedures.engagement, "ENGAGED")),
+    )
     .orderBy(asc(deadlines.dueAt));
 }
 

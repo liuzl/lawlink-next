@@ -43,15 +43,19 @@ function addDays(d: Date, n: number): Date {
   r.setDate(r.getDate() + n);
   return r;
 }
+/** Add calendar months, CLAMPING to the last valid day (no month overflow:
+ * 8-31 + 6m -> 2-28, not 3-3). */
 function addMonths(d: Date, n: number): Date {
+  const day = d.getDate();
   const r = new Date(d.getTime());
+  r.setDate(1);
   r.setMonth(r.getMonth() + n);
+  const lastDay = new Date(r.getFullYear(), r.getMonth() + 1, 0).getDate();
+  r.setDate(Math.min(day, lastDay));
   return r;
 }
 function addYears(d: Date, n: number): Date {
-  const r = new Date(d.getTime());
-  r.setFullYear(r.getFullYear() + n);
-  return r;
+  return addMonths(d, n * 12);
 }
 
 /** Compute the statutory deadlines flowing from an event. */
@@ -94,12 +98,8 @@ export function computeDeadlines(
       break;
     }
     case "JUDGMENT_EFFECTIVE": {
-      out.push({
-        category: "ENFORCEMENT",
-        title: "申请强制执行时效（2年）",
-        dueAt: addYears(eventDate, 2),
-        basis: "申请执行时效 2 年，自法律文书规定履行期间最后一日起；本项以裁判生效日近似，需按履行期核对",
-      });
+      // NOTE: enforcement time-bar runs from the last day of the PERFORMANCE
+      // period, not from the effective date — see the PERFORMANCE_DUE event.
       out.push({
         category: "RETRIAL_APPLICATION",
         title: "申请再审期限（6个月）",
