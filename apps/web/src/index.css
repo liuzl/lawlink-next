@@ -2,45 +2,199 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Design tokens ported from the original LawLink (editorial light + teal). */
-:root {
-  --background: 220 16% 95%;
-  --foreground: 215 25% 10%;
-  --card: 0 0% 100%;
-  --card-foreground: 215 25% 10%;
-  --primary: 180 100% 25%;
-  --primary-foreground: 0 0% 100%;
-  --muted: 220 14% 92%;
-  --muted-foreground: 210 8% 42%;
-  --border: 220 14% 86%;
-  --hairline: 220 14% 88%;
-  --destructive: 0 70% 50%;
-  --radius: 0.375rem;
-  --radius-md: 0.5rem;
-  --font-mono: "SF Mono", "Cascadia Code", "Consolas", ui-monospace, monospace;
-  --status-green: 125 55% 36%;
-  --status-orange: 35 88% 45%;
-  --status-red: 0 70% 48%;
-  --status-purple: 270 67% 48%;
-  --status-blue: 217 91% 60%;
+@layer base {
+  :root {
+    /* v0.15: 加大背景/卡片明暗对比 — page 改浅灰，card 仍为纯白形成浮起感 */
+    --background: 220 16% 95%;         /* #eef0f3 浅灰页面 */
+    --foreground: 215 25% 10%;         /* #151a21 */
+
+    --card: 0 0% 100%;                 /* #ffffff 卡片仍纯白 */
+    --card-foreground: 215 25% 10%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 215 25% 10%;
+
+    --primary: 180 100% 25%;           /* #007b7f teal */
+    --primary-foreground: 0 0% 100%;
+
+    --secondary: 220 14% 92%;
+    --secondary-foreground: 215 25% 10%;
+
+    --muted: 220 14% 92%;              /* 加深 96% → 92%，hover/active 更明显 */
+    --muted-foreground: 210 8% 42%;    /* #5e6772 加深一档 */
+    --muted-subtle: 210 8% 60%;
+
+    --accent: 220 14% 92%;
+    --accent-foreground: 215 25% 10%;
+
+    --destructive: 0 70% 50%;          /* #d4252f */
+    --destructive-foreground: 0 0% 100%;
+
+    --border: 220 14% 86%;             /* #d4d8de 加深，卡片边界更清晰 */
+    --border-strong: 220 13% 72%;
+    --hairline: 220 14% 88%;
+    --input: 220 12% 78%;
+    --ring: 180 100% 25%;
+
+    --radius: 0.375rem;                /* 6px */
+    --radius-sm: 0.25rem;              /* 4px */
+    --radius-md: 0.5rem;               /* 8px */
+    --radius-lg: 0.5rem;
+    --radius-xl: 0.75rem;
+
+    --font-mono: "SF Mono", "Cascadia Code", "Consolas", ui-monospace, monospace;
+
+    --shadow-low: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+    --shadow-medium: 0 4px 12px rgba(15, 23, 42, 0.08), 0 2px 4px rgba(15, 23, 42, 0.04);
+    --shadow-high: 0 8px 24px rgba(15, 23, 42, 0.10), 0 4px 8px rgba(15, 23, 42, 0.05);
+    --shadow-inset: inset 0 1px 0 rgba(255,255,255,0.6);
+
+    /* 侧边栏专用 - 比 page bg 略深 */
+    --sidebar-bg: 220 16% 92%;         /* #e5e8ec */
+
+    /* 状态色 */
+    --status-green: 125 55% 36%;       /* #1aa126 */
+    --status-green-bg: 125 55% 94%;
+    --status-orange: 35 88% 45%;       /* #e18d00 */
+    --status-orange-bg: 35 88% 94%;
+    --status-red: 0 70% 48%;           /* #d4252f */
+    --status-red-bg: 0 70% 94%;
+    --status-purple: 270 67% 48%;      /* #722ec7 */
+    --status-purple-bg: 270 67% 94%;
+    --status-blue: 217 91% 60%;        /* #3b82f6 */
+    --status-blue-bg: 217 91% 94%;
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+
+  .tabular { font-variant-numeric: tabular-nums; }
 }
 
-html,
-body,
-#root {
-  height: 100%;
+@layer components {
+  /* 卡片 */
+  .ll-surface {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-low);
+  }
+  .ll-surface-quiet {
+    background: hsl(var(--muted));
+    border: 1px solid hsl(var(--border));
+    border-radius: var(--radius-md);
+  }
+
+  /* hairline */
+  .ll-hairline-b { border-bottom: 1px solid hsl(var(--hairline)); }
+  .ll-hairline-t { border-top: 1px solid hsl(var(--hairline)); }
+  .ll-hairline-y {
+    border-top: 1px solid hsl(var(--hairline));
+    border-bottom: 1px solid hsl(var(--hairline));
+  }
+
+  /* 分割线 */
+  .ll-rule {
+    height: 1px;
+    background: hsl(var(--border));
+  }
+
+  /* stat 数字 */
+  .ll-stat {
+    font-family: var(--font-mono), 'JetBrains Mono', ui-monospace, monospace;
+    font-variant-numeric: tabular-nums lining-nums;
+    letter-spacing: -0.02em;
+    font-weight: 500;
+  }
+
+  /* pill / chip */
+  .ll-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.15rem 0.55rem;
+    border-radius: var(--radius-sm);
+    font-size: 0.72rem;
+    line-height: 1.4;
+    background: hsl(var(--muted));
+    color: hsl(var(--muted-foreground));
+  }
+  .ll-chip-primary {
+    background: hsl(var(--primary) / 0.10);
+    color: hsl(var(--primary));
+  }
+
+  /* 状态严重度 */
+  .ll-sev-low      { @apply text-[#1aa126] bg-[#e6f4ea]; }
+  .ll-sev-medium   { @apply text-[#e18d00] bg-[#fef3e2]; }
+  .ll-sev-high     { @apply text-[#d4252f] bg-[#fde8e8]; }
+  .ll-sev-blocking { @apply text-[#d4252f] bg-[#fde8e8] font-semibold; }
+
+  /* 列表行 hover */
+  .ll-row {
+    position: relative;
+    transition: background-color 0.15s ease;
+  }
+  .ll-row:hover {
+    background: hsl(var(--muted) / 0.5);
+  }
+
+  /* chip status colors */
+  .ll-chip-green  { color: hsl(var(--status-green));  background: hsl(var(--status-green-bg)); }
+  .ll-chip-orange { color: hsl(var(--status-orange)); background: hsl(var(--status-orange-bg)); }
+  .ll-chip-red    { color: hsl(var(--status-red));    background: hsl(var(--status-red-bg)); }
+  .ll-chip-purple { color: hsl(var(--status-purple)); background: hsl(var(--status-purple-bg)); }
+  .ll-chip-blue   { color: hsl(var(--status-blue));   background: hsl(var(--status-blue-bg)); }
+  .ll-chip-teal   { color: hsl(var(--primary));       background: hsl(var(--primary) / 0.10); }
 }
 
-body {
-  @apply bg-background text-foreground antialiased;
-  font-family:
-    system-ui,
-    -apple-system,
-    "Segoe UI",
-    sans-serif;
-  font-feature-settings: "rlig" 1, "calt" 1;
+@layer utilities {
+  .shadow-ll-low    { box-shadow: var(--shadow-low); }
+  .shadow-ll-medium { box-shadow: var(--shadow-medium); }
+  .shadow-ll-high   { box-shadow: var(--shadow-high); }
+
+  .scrollbar-none {
+    -ms-overflow-style: none;
+    scrollbar-width: none;
+  }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
 }
 
-.tabular {
-  font-variant-numeric: tabular-nums;
+/* v0.22: 打印 / 保 PDF 样式 —— 律师 Cmd+P 直接出报告，不引 puppeteer */
+@media print {
+  /* 隐藏 Sidebar / Topbar / 任何标 .ll-no-print 的 UI */
+  aside,
+  header,
+  .ll-no-print {
+    display: none !important;
+  }
+  /* 移除 main 的左边距（无 sidebar 占位）+ 解开 max-width */
+  main {
+    padding: 0 !important;
+    max-width: none !important;
+  }
+  body, html {
+    background: white !important;
+  }
+  /* 表格、卡片不被分页切断 */
+  section,
+  table,
+  tr {
+    page-break-inside: avoid;
+  }
+  /* 卡片去阴影 */
+  .ll-surface {
+    box-shadow: none !important;
+  }
+  /* 链接的下划线在纸上多余 */
+  a {
+    color: inherit !important;
+    text-decoration: none !important;
+  }
 }
