@@ -1,10 +1,10 @@
 /** Matter activity: tasks / notes / hearings (DOMAIN-SPEC §4.8, §4.9). */
 import { z } from "zod";
 import { and, asc, desc, eq, getTableColumns } from "drizzle-orm";
-import { hearings, matterProcedures, matters, notes, tasks } from "@lawlink/db";
-import { DomainError, type AuthContext, type Deps } from "../types.js";
+import { hearings, matterProcedures, matters, notes, tasks, users } from "@lawlink/db";
+import { DomainError, type AuthContext, type Deps, type Role } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, canAccessMatter } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 import { enqueueNotification } from "../notification/actions.js";
 
@@ -46,7 +46,24 @@ export const AddTaskInput = z.object({
 export async function addTask(deps: Deps, auth: AuthContext, rawInput: unknown) {
   requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT");
   const input = AddTaskInput.parse(rawInput);
-  await assertMatterWritable(deps.db, auth, input.matterId);
+  const m = await assertMatterWritable(deps.db, auth, input.matterId);
+
+  // A task may only be assigned to someone authorized for the matter — otherwise
+  // the TASK_ASSIGNED notification (raw title + matter link) would leak case
+  // detail to a user who can't open the matter. This also rejects assigning to
+  // an account that couldn't act on the task anyway.
+  if (input.assigneeId && input.assigneeId !== auth.userId) {
+    const [assignee] = await deps.db
+      .select({ role: users.role, active: users.active })
+      .from(users)
+      .where(eq(users.id, input.assigneeId))
+      .limit(1);
+    if (!assignee || !assignee.active) throw new DomainError("VALIDATION", "被指派人无效");
+    if (!canAccessMatter(m, { userId: input.assigneeId, role: assignee.role as Role })) {
+      throw new DomainError("VALIDATION", "被指派人没有该案件的权限");
+    }
+  }
+
   const id = deps.ids.newId();
   await deps.db.insert(tasks).values({
     id,
