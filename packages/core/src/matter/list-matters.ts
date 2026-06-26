@@ -1,24 +1,36 @@
-/** Use cases: list matters, and fetch one matter with its procedures + parties. */
+/** Use cases: list matters, and fetch one matter with its procedures + parties.
+ * Visibility is enforced here (DOMAIN-SPEC §2.2) — see ./access. */
 import { desc, eq } from "drizzle-orm";
 import { matterProcedures, matters, parties } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
+import { isManagement } from "../permissions.js";
+import { assertMatterAccess } from "./access.js";
 
-export async function listMatters(deps: Deps, _auth: AuthContext) {
-  // TODO(P1 permissions): scope by role/visibility (DOMAIN-SPEC §2.2).
+export async function listMatters(deps: Deps, auth: AuthContext) {
+  // Management sees all; a LAWYER sees their own; others see none (until membership).
+  const condition = isManagement(auth)
+    ? undefined
+    : auth.role === "LAWYER"
+      ? eq(matters.ownerId, auth.userId)
+      : null;
+  if (condition === null) return [];
+
   return await deps.db
     .select()
     .from(matters)
+    .where(condition)
     .orderBy(desc(matters.createdAt))
     .limit(100);
 }
 
-export async function getMatter(deps: Deps, _auth: AuthContext, rawInput: { matterId: string }) {
+export async function getMatter(deps: Deps, auth: AuthContext, rawInput: { matterId: string }) {
   const [matter] = await deps.db
     .select()
     .from(matters)
     .where(eq(matters.id, rawInput.matterId))
     .limit(1);
   if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
+  assertMatterAccess(matter, auth);
 
   const procedures = await deps.db
     .select()

@@ -11,7 +11,12 @@ export type Database = ReturnType<typeof drizzle<typeof schema>>;
 
 /** Local / self-hosted: libSQL (a SQLite file, e.g. "file:./lawlink.db"). */
 export function createDb(url: string): Database {
-  return drizzle(createClient({ url }), { schema });
+  const client = createClient({ url });
+  // WAL + a busy timeout so concurrent writers wait instead of failing with
+  // SQLITE_BUSY (these run before any query on libSQL's serialized connection).
+  void client.execute("PRAGMA journal_mode = WAL").catch(() => {});
+  void client.execute("PRAGMA busy_timeout = 5000").catch(() => {});
+  return drizzle(client, { schema });
 }
 
 // Cloudflare D1 (Workers) — added in P5:

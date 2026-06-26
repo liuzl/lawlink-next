@@ -1,14 +1,18 @@
 /**
  * Use case: add a procedure to a matter (DOMAIN-SPEC §3, §4.2).
  *
- * Validates the procedure type is allowed for the matter's category, and
- * allocates the next per-matter order atomically within a transaction.
+ * - Authorization: management or the matter owner (DOMAIN-SPEC §2.2) — a role
+ *   check alone is not enough (a LAWYER must not edit another lawyer's matter).
+ * - Type must be allowed for the matter's category.
+ * - Per-matter order is allocated from an ATOMIC counter (not SELECT-max+1),
+ *   so concurrent adds get distinct orders without racing the unique constraint.
  */
 import { z } from "zod";
-import { desc, eq } from "drizzle-orm";
-import { matterProcedures, matters } from "@lawlink/db";
+import { eq, sql } from "drizzle-orm";
+import { counters, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
+import { assertMatterAccess } from "../matter/access.js";
 import { PROCEDURES_BY_CATEGORY, isProcedureAllowed } from "./types.js";
 
 export const AddProcedureInput = z.object({
@@ -27,11 +31,12 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
 
   return await deps.db.transaction(async (tx) => {
     const [matter] = await tx
-      .select({ category: matters.category })
+      .select({ category: matters.category, ownerId: matters.ownerId })
       .from(matters)
       .where(eq(matters.id, input.matterId))
       .limit(1);
     if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
+    assertMatterAccess(matter, auth);
 
     const category = matter.category as MatterCategory;
     if (!isProcedureAllowed(category, input.type as never)) {
@@ -41,13 +46,13 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
       );
     }
 
-    const [last] = await tx
-      .select({ order: matterProcedures.order })
-      .from(matterProcedures)
-      .where(eq(matterProcedures.matterId, input.matterId))
-      .orderBy(desc(matterProcedures.order))
-      .limit(1);
-    const order = (last?.order ?? 0) + 1;
+    // Atomic per-matter order — no read-then-write race against unique(matterId, order).
+    const [counter] = await tx
+      .insert(counters)
+      .values({ key: `proc-order-${input.matterId}`, value: 1 })
+      .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
+      .returning({ value: counters.value });
+    const order = counter.value;
 
     const id = deps.ids.newId();
     await tx.insert(matterProcedures).values({
