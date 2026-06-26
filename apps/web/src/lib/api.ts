@@ -88,6 +88,16 @@ export interface MatterDetail extends MatterRow {
   procedures: ProcedureRow[];
   parties: MatterPartyRow[];
 }
+export interface DeadlineRow {
+  id: string;
+  procedureId: string;
+  category: string;
+  title: string;
+  dueAt: string;
+  basis: string | null;
+  autoComputed: boolean;
+  completed: boolean;
+}
 
 export const api = {
   login: (email: string, password: string) =>
@@ -114,4 +124,12 @@ export const api = {
       method: "POST",
       body: JSON.stringify(body),
     }),
+  listDeadlines: (matterId: string) => req<DeadlineRow[]>(`/matters/${matterId}/deadlines`),
+  computeDeadlines: (procedureId: string, body: Record<string, unknown>) =>
+    req<{ created: number }>(`/procedures/${procedureId}/deadlines/compute`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  completeDeadline: (id: string) =>
+    req<{ completed: boolean }>(`/deadlines/${id}/complete`, { method: "POST" }),
 };

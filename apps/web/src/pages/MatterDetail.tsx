@@ -1,7 +1,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router-dom";
-import { ChevronLeft } from "lucide-react";
-import { api, getRole, type MatterDetail as MatterDetailData } from "@/lib/api";
+import { CalendarClock, Check, ChevronLeft } from "lucide-react";
+import {
+  api,
+  getRole,
+  type DeadlineRow,
+  type MatterDetail as MatterDetailData,
+} from "@/lib/api";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -39,13 +44,38 @@ const PARTY_CN: Record<string, string> = {
   OPPOSING_PARTY: "对方",
   THIRD_PARTY: "第三人",
 };
+const DL_EVENTS: { value: string; label: string }[] = [
+  { value: "JUDGMENT_SERVED", label: "判决书送达" },
+  { value: "RULING_SERVED", label: "裁定书送达" },
+  { value: "COMPLAINT_SERVED", label: "起诉状副本送达" },
+  { value: "JUDGMENT_EFFECTIVE", label: "裁判生效" },
+  { value: "PERFORMANCE_DUE", label: "履行期限届满" },
+  { value: "ARBITRATION_AWARD_RECEIVED", label: "收到仲裁裁决书" },
+];
+const DL_CAT_CN: Record<string, string> = {
+  APPEAL: "上诉期",
+  RESPONSE: "答辩期",
+  ENFORCEMENT: "申请执行",
+  RETRIAL_APPLICATION: "申请再审",
+  ARBITRATION_SET_ASIDE: "撤销仲裁",
+  LIMITATION: "诉讼时效",
+  CUSTOM: "自定义",
+};
+
+function dueDays(dueAt: string): number {
+  return Math.ceil((new Date(dueAt).getTime() - Date.now()) / 86400000);
+}
 
 export function MatterDetail() {
   const { id = "" } = useParams();
   const [matter, setMatter] = useState<MatterDetailData | null>(null);
+  const [deadlines, setDeadlines] = useState<DeadlineRow[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [type, setType] = useState("");
   const [caseNumber, setCaseNumber] = useState("");
+  const [dlProc, setDlProc] = useState("");
+  const [dlEvent, setDlEvent] = useState("");
+  const [dlDate, setDlDate] = useState("");
   const [busy, setBusy] = useState(false);
   const role = getRole();
   const canEdit = role === "ADMIN" || role === "PRINCIPAL_LAWYER" || role === "LAWYER";
@@ -55,11 +85,14 @@ export function MatterDetail() {
   useEffect(() => {
     let active = true;
     setMatter(null);
+    setDeadlines([]);
     setError(null);
-    api
-      .getMatter(id)
-      .then((m) => {
-        if (active) setMatter(m);
+    Promise.all([api.getMatter(id), api.listDeadlines(id)])
+      .then(([m, dl]) => {
+        if (active) {
+          setMatter(m);
+          setDeadlines(dl);
+        }
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : String(err));
@@ -71,8 +104,37 @@ export function MatterDetail() {
 
   async function refresh() {
     try {
-      setMatter(await api.getMatter(id));
+      const [m, dl] = await Promise.all([api.getMatter(id), api.listDeadlines(id)]);
+      setMatter(m);
+      setDeadlines(dl);
       setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  async function computeDl(e: FormEvent) {
+    e.preventDefault();
+    if (!dlProc || !dlEvent || !dlDate) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await api.computeDeadlines(dlProc, { event: dlEvent, eventDate: dlDate });
+      setDlEvent("");
+      setDlDate("");
+      await refresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function completeDl(deadlineId: string) {
+    setError(null);
+    try {
+      await api.completeDeadline(deadlineId);
+      await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -197,6 +259,97 @@ export function MatterDetail() {
             </form>
           )}
           {error && matter && <p className="text-xs text-destructive">{error}</p>}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="flex items-center gap-2 text-sm font-semibold">
+            <CalendarClock className="h-4 w-4 text-primary" strokeWidth={1.8} />
+            期限
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          {deadlines.map((d) => {
+            const days = dueDays(d.dueAt);
+            const overdue = !d.completed && days < 0;
+            const soon = !d.completed && days >= 0 && days <= 7;
+            return (
+              <div
+                key={d.id}
+                className="flex items-center justify-between rounded-sm border border-border px-3 py-2.5"
+                title={d.basis ?? undefined}
+              >
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="ll-chip tabular">{DL_CAT_CN[d.category] ?? d.category}</span>
+                    <span className={`text-sm font-medium ${d.completed ? "text-muted-foreground line-through" : ""}`}>
+                      {d.title}
+                    </span>
+                    {d.autoComputed && <Badge variant="secondary" className="text-[10px]">自动推算</Badge>}
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    截止 {d.dueAt.slice(0, 10)}
+                    {!d.completed && (
+                      <span className={overdue ? "ml-2 text-destructive" : soon ? "ml-2 text-status-orange" : "ml-2"}>
+                        {overdue ? `已逾期 ${-days} 天` : `剩 ${days} 天`}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {canEdit && !d.completed && (
+                  <Button variant="ghost" size="sm" onClick={() => completeDl(d.id)}>
+                    <Check className="mr-1 h-3.5 w-3.5" /> 完成
+                  </Button>
+                )}
+              </div>
+            );
+          })}
+          {deadlines.length === 0 && <p className="py-2 text-xs text-muted-foreground">尚无期限</p>}
+
+          {canEdit && matter.procedures.some((p) => p.engagement === "ENGAGED") && (
+            <form onSubmit={computeDl} className="flex flex-wrap items-end gap-3 pt-2">
+              <div className="space-y-1.5">
+                <Label>程序</Label>
+                <Select value={dlProc} onValueChange={setDlProc}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="选择程序" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {matter.procedures
+                      .filter((p) => p.engagement === "ENGAGED")
+                      .map((p) => (
+                        <SelectItem key={p.id} value={p.id}>
+                          {PROC_CN[p.type] ?? p.type}
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>事件</Label>
+                <Select value={dlEvent} onValueChange={setDlEvent}>
+                  <SelectTrigger className="w-40">
+                    <SelectValue placeholder="选择事件" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DL_EVENTS.map((e) => (
+                      <SelectItem key={e.value} value={e.value}>
+                        {e.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1.5">
+                <Label>事件日期</Label>
+                <Input type="date" value={dlDate} onChange={(e) => setDlDate(e.target.value)} className="w-40" />
+              </div>
+              <Button type="submit" disabled={busy || !dlProc || !dlEvent || !dlDate}>
+                {busy ? "推算中…" : "推算期限"}
+              </Button>
+            </form>
+          )}
         </CardContent>
       </Card>
     </div>
