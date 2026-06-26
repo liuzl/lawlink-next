@@ -1,6 +1,6 @@
 /** Property-preservation use cases (DOMAIN-SPEC §6.5, §9.2). */
 import { z } from "zod";
-import { asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray, lt } from "drizzle-orm";
 import { matters, preservationRenewals, preservations } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
@@ -90,6 +90,11 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
     if (input.newExpiryDate <= p.expiryDate) {
       throw new DomainError("VALIDATION", "续保到期日必须晚于当前到期日");
     }
+    // A renewal must extend protection into the future — renewing a lapsed
+    // window to another past date would falsely mark it RENEWED/active.
+    if (input.newExpiryDate <= now) {
+      throw new DomainError("VALIDATION", "续保到期日必须晚于今天");
+    }
 
     await tx
       .update(preservations)
@@ -134,9 +139,34 @@ export async function listMatterPreservations(
   rawInput: { matterId: string },
 ) {
   await assertCanEditMatter(deps.db, auth, rawInput.matterId);
-  return await deps.db
+  const rows = await deps.db
     .select()
     .from(preservations)
     .where(eq(preservations.matterId, rawInput.matterId))
     .orderBy(asc(preservations.expiryDate));
+
+  // Derive days-to-expiry at read so the UI shows lapsed/near-expiry state
+  // correctly even if the EXPIRED scan (system job) hasn't run yet.
+  const todayMs = deps.clock.now().getTime();
+  return rows.map((r) => ({
+    ...r,
+    daysToExpiry: Math.ceil((r.expiryDate.getTime() - todayMs) / 86400000),
+  }));
+}
+
+/**
+ * System job (no auth — cron entry point, DOMAIN-SPEC §9.2): mark non-lifted
+ * preservations whose expiry has passed as EXPIRED. Reminder notifications for
+ * the [30,15,7,3,1] window land with the dashboard/notification work.
+ */
+export async function scanPreservationExpiry(deps: Deps): Promise<{ expired: number }> {
+  const now = deps.clock.now();
+  const updated = await deps.db
+    .update(preservations)
+    .set({ status: "EXPIRED" })
+    .where(
+      and(inArray(preservations.status, ["ACTIVE", "RENEWED"]), lt(preservations.expiryDate, now)),
+    )
+    .returning({ id: preservations.id });
+  return { expired: updated.length };
 }

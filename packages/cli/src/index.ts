@@ -24,6 +24,7 @@ import {
   listMatters,
   login,
   renewPreservation,
+  scanPreservationExpiry,
   requireJwtSecret,
   runConflictCheck,
   verifyToken,
@@ -336,5 +337,10 @@ preservation
       }),
     ),
   );
+
+preservation
+  .command("scan")
+  .description("系统任务：标记已过期保全（cron 入口，DOMAIN-SPEC §9.2）")
+  .action(() => run(async () => scanPreservationExpiry(buildDeps())));
 
 program.parseAsync(process.argv);
