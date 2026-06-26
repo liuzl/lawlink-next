@@ -128,6 +128,48 @@ export const deadlines = sqliteTable(
   ],
 );
 
+/** Property preservation (财产保全) — expiry tracking + renewal (DOMAIN-SPEC §6.5, §9.2). */
+export const preservations = sqliteTable(
+  "Preservation",
+  {
+    id: text("id").primaryKey(),
+    matterId: text("matter_id").notNull(),
+    // PRE_LITIGATION | IN_LITIGATION | ENFORCEMENT
+    type: text("type").notNull(),
+    // BANK_DEPOSIT | REAL_ESTATE | VEHICLE | EQUITY | IP | OTHER
+    propertyType: text("property_type").notNull(),
+    amount: text("amount"),
+    respondent: text("respondent"),
+    guaranteeType: text("guarantee_type"),
+    startDate: integer("start_date", { mode: "timestamp" }).notNull(),
+    durationDays: integer("duration_days").notNull(),
+    expiryDate: integer("expiry_date", { mode: "timestamp" }).notNull(),
+    // ACTIVE | RENEWED | EXPIRED | LIFTED
+    status: text("status").notNull().default("ACTIVE"),
+    remindDays: text("remind_days").notNull().default("[30,15,7,3,1]"),
+    ownerId: text("owner_id"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("Preservation_matter_idx").on(t.matterId),
+    index("Preservation_expiry_idx").on(t.status, t.expiryDate),
+  ],
+);
+
+export const preservationRenewals = sqliteTable(
+  "PreservationRenewal",
+  {
+    id: text("id").primaryKey(),
+    preservationId: text("preservation_id").notNull(),
+    oldExpiryDate: integer("old_expiry_date", { mode: "timestamp" }).notNull(),
+    newExpiryDate: integer("new_expiry_date", { mode: "timestamp" }).notNull(),
+    renewedAt: integer("renewed_at", { mode: "timestamp" }).notNull(),
+    performedById: text("performed_by_id").notNull(),
+    note: text("note"),
+  },
+  (t) => [index("PreservationRenewal_pres_idx").on(t.preservationId)],
+);
+
 /** Atomic named counters (internalCode sequences, etc.). */
 export const counters = sqliteTable("Counter", {
   key: text("key").primaryKey(),

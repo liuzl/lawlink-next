@@ -15,12 +15,15 @@ import {
   completeDeadline,
   convertIntake,
   createIntake,
+  createPreservation,
   declineIntake,
   getMatter,
   hashPassword,
   listMatterDeadlines,
+  listMatterPreservations,
   listMatters,
   login,
+  renewPreservation,
   requireJwtSecret,
   runConflictCheck,
   verifyToken,
@@ -281,6 +284,57 @@ deadline
   .option("--token <token>", "登录态")
   .action((opts) =>
     run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
+  );
+
+// ── preservation ────────────────────────────────────────────────────────────
+const preservation = program.command("preservation").description("财产保全");
+
+preservation
+  .command("create")
+  .requiredOption("--matter-id <id>")
+  .requiredOption("--type <t>", "PRE_LITIGATION|IN_LITIGATION|ENFORCEMENT")
+  .requiredOption("--property-type <t>", "BANK_DEPOSIT|REAL_ESTATE|VEHICLE|EQUITY|IP|OTHER")
+  .requiredOption("--start-date <date>", "生效日 YYYY-MM-DD")
+  .option("--amount <a>", "保全金额")
+  .option("--respondent <r>", "被保全人")
+  .option("--duration-days <n>", "保全期限天数（缺省按财产类型法定上限）")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      createPreservation(buildDeps(), await resolveAuth(opts.token), {
+        matterId: opts.matterId,
+        type: opts.type,
+        propertyType: opts.propertyType,
+        startDate: opts.startDate,
+        amount: opts.amount,
+        respondent: opts.respondent,
+        durationDays: opts.durationDays,
+      }),
+    ),
+  );
+
+preservation
+  .command("list")
+  .requiredOption("--matter-id <id>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () => listMatterPreservations(buildDeps(), await resolveAuth(opts.token), { matterId: opts.matterId })),
+  );
+
+preservation
+  .command("renew")
+  .requiredOption("--preservation-id <id>")
+  .requiredOption("--new-expiry-date <date>", "新到期日 YYYY-MM-DD")
+  .option("--note <n>")
+  .option("--token <token>", "登录态")
+  .action((opts) =>
+    run(async () =>
+      renewPreservation(buildDeps(), await resolveAuth(opts.token), {
+        preservationId: opts.preservationId,
+        newExpiryDate: opts.newExpiryDate,
+        note: opts.note,
+      }),
+    ),
   );
 
 program.parseAsync(process.argv);

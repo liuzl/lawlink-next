@@ -15,12 +15,16 @@ import {
   completeDeadline,
   convertIntake,
   createIntake,
+  createPreservation,
   declineIntake,
   getMatter,
+  liftPreservation,
   listIntakes,
   listMatterDeadlines,
+  listMatterPreservations,
   listMatters,
   login,
+  renewPreservation,
   requireJwtSecret,
   runConflictCheck,
   verifyToken,
@@ -187,6 +191,45 @@ app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
 app.post("/api/deadlines/:id/complete", requireAuth, async (c) => {
   try {
     return c.json(await completeDeadline(buildDeps(), c.get("auth"), { deadlineId: c.req.param("id") }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.get("/api/matters/:id/preservations", requireAuth, async (c) => {
+  try {
+    return c.json(await listMatterPreservations(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/matters/:id/preservations", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(
+      await createPreservation(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      201,
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
+  try {
+    const body = await c.req.json<Record<string, unknown>>();
+    return c.json(
+      await renewPreservation(buildDeps(), c.get("auth"), { ...body, preservationId: c.req.param("id") }),
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
+app.post("/api/preservations/:id/lift", requireAuth, async (c) => {
+  try {
+    return c.json(await liftPreservation(buildDeps(), c.get("auth"), { preservationId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
