@@ -14,6 +14,7 @@ import { matterProcedures, matters, smsMessages } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
 import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterWritable } from "../matter/guards.js";
 import { addHearing } from "../activity/actions.js";
 import { addDeadline } from "../deadline/actions.js";
 import { parseSms, toDate, type ParsedSms } from "./parser.js";
@@ -190,6 +191,24 @@ async function resolveProcedure(deps: Deps, matterId: string, parsed: ParsedSms,
   throw new DomainError("VALIDATION", "无法确定程序，请指定 procedureId");
 }
 
+/** Replicate the downstream addHearing/addDeadline preconditions BEFORE we claim
+ * the SMS, so a doomed generation never marks the message processed: the target
+ * procedure must be ENGAGED (not INFORMATIONAL) and its matter writable (access +
+ * not archived). The role check is done per-action by the caller (the hearing and
+ * deadline use cases allow different role sets). */
+async function assertGeneratableProcedure(deps: Deps, auth: AuthContext, procedureId: string) {
+  const [p] = await deps.db
+    .select({ engagement: matterProcedures.engagement, matterId: matterProcedures.matterId })
+    .from(matterProcedures)
+    .where(eq(matterProcedures.id, procedureId))
+    .limit(1);
+  if (!p) throw new DomainError("NOT_FOUND", "程序不存在");
+  if (p.engagement === "INFORMATIONAL") {
+    throw new DomainError("VALIDATION", "前序参考程序不进入日程聚合，不能生成开庭/期限");
+  }
+  await assertMatterWritable(deps.db, auth, p.matterId); // access + not archived
+}
+
 export const GenerateHearingInput = z.object({
   smsId: z.string().min(1),
   procedureId: z.string().min(1).optional(),
@@ -199,6 +218,7 @@ export const GenerateHearingInput = z.object({
 
 /** One-click: create a Hearing on the matched matter from the parsed hearing time. */
 export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawInput: unknown) {
+  requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER", "ASSISTANT"); // mirror addHearing
   const input = GenerateHearingInput.parse(rawInput);
   const r = await visibleSms(deps, auth, input.smsId);
   if (!r.matchedMatterId) throw new DomainError("INVALID_STATE", "短信未关联案件，请先匹配案件");
@@ -208,6 +228,7 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   const startsAt = input.startsAt ?? (parsed.hearingDate ? toDate(parsed.hearingDate) : null);
   if (!startsAt) throw new DomainError("VALIDATION", "短信中未识别到开庭时间，请手动指定");
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
+  await assertGeneratableProcedure(deps, auth, procedureId); // all addHearing preconditions, pre-claim
 
   // Atomically CLAIM the SMS before creating anything: flip processed false→true
   // in one guarded statement. A re-click or concurrent request matches 0 rows and
@@ -256,6 +277,7 @@ export const GenerateDeadlineInput = z.object({
  * explicit input, else derived from the parsed appeal window (judgment/filing
  * date + N days). */
 export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, rawInput: unknown) {
+  requireRole(auth, "ADMIN", "PRINCIPAL_LAWYER", "LAWYER"); // mirror addDeadline (no ASSISTANT)
   const input = GenerateDeadlineInput.parse(rawInput);
   const r = await visibleSms(deps, auth, input.smsId);
   if (!r.matchedMatterId) throw new DomainError("INVALID_STATE", "短信未关联案件，请先匹配案件");
@@ -270,6 +292,7 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   }
   if (!dueAt) throw new DomainError("VALIDATION", "无法确定到期日，请手动指定");
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
+  await assertGeneratableProcedure(deps, auth, procedureId); // all addDeadline preconditions, pre-claim
 
   // Atomic claim before creating — same idempotency guard as gen-hearing.
   const now = deps.clock.now();
