@@ -9,11 +9,15 @@ import { fromCents, percentOfCents, toCents } from "./money.js";
 
 const AMOUNT = z.string().regex(/^\d+(\.\d{1,2})?$/, "金额格式应为最多两位小数");
 
-/** Finance access: management & FINANCE see all; LAWYER sees own; else none. */
+/**
+ * Finance access (DOMAIN-SPEC §2.2): FINANCE is a firm-wide finance role and
+ * intentionally sees/edits every matter's financial fields (not the case body);
+ * management likewise. A LAWYER is scoped to matters they own. ASSISTANT: none.
+ */
 async function assertFinanceAccess(db: Deps["db"], auth: AuthContext, matterId: string) {
   const [m] = await db.select({ ownerId: matters.ownerId }).from(matters).where(eq(matters.id, matterId)).limit(1);
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-  if (isManagement(auth) || auth.role === "FINANCE") return;
+  if (isManagement(auth) || auth.role === "FINANCE") return; // firm-wide finance (§2.2)
   if (auth.role === "LAWYER" && m.ownerId === auth.userId) return;
   throw new DomainError("NOT_FOUND", "案件不存在");
 }
@@ -40,15 +44,18 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
   if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
   assertMatterAccess(m, auth); // management or owner (lead)
 
-  const sum = input.plans.reduce((s, p) => s + p.percent, 0);
+  // Quantize to 2 decimals FIRST, then validate the sum in the same
+  // representation that is persisted (so stored percents can't drift past 100%).
+  const quantized = input.plans.map((p) => ({ ...p, percent: Math.round(p.percent * 100) / 100 }));
+  const sum = quantized.reduce((s, p) => s + p.percent, 0);
   if (sum > 100) throw new DomainError("VALIDATION", `分成比例之和 ${sum}% 不能超过 100%`);
 
   const now = deps.clock.now();
   await deps.db.transaction(async (tx) => {
     await tx.delete(commissionPlans).where(eq(commissionPlans.matterId, input.matterId));
-    if (input.plans.length > 0) {
+    if (quantized.length > 0) {
       await tx.insert(commissionPlans).values(
-        input.plans.map((p) => ({
+        quantized.map((p) => ({
           id: deps.ids.newId(),
           matterId: input.matterId,
           userId: p.userId,
@@ -109,8 +116,16 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
         .from(commissionPlans)
         .where(and(eq(commissionPlans.matterId, input.matterId), eq(commissionPlans.active, true)));
       const receivedCents = toCents(input.amount);
+      // Cumulative (telescoping) allocation: each share is the difference of
+      // running-cumulative rounded amounts, so the children sum EXACTLY to
+      // round(received × Σpercent) and can never overpay the received amount.
+      let cumPercent = 0;
+      let prevCumCents = 0;
       for (const plan of plans) {
-        const shareCents = percentOfCents(receivedCents, plan.percent);
+        cumPercent += Number(plan.percent);
+        const cumCents = percentOfCents(receivedCents, cumPercent);
+        const shareCents = cumCents - prevCumCents;
+        prevCumCents = cumCents;
         if (shareCents === 0) continue;
         await tx.insert(feeEntries).values({
           id: deps.ids.newId(),
@@ -150,12 +165,17 @@ export async function deleteFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
     .limit(1);
   if (!entry) throw new DomainError("NOT_FOUND", "流水不存在");
   await assertFinanceAccess(deps.db, auth, entry.matterId);
-  if (entry.type === "COMMISSION" && entry.parentFeeEntryId) {
+  // System-generated commission rows are never deletable directly (even if
+  // orphaned) — they are managed via their RECEIVED parent.
+  if (entry.type === "COMMISSION") {
     throw new DomainError("INVALID_STATE", "分成条目由实收自动生成，请删除对应实收记录");
   }
 
   await deps.db.transaction(async (tx) => {
-    await tx.delete(feeEntries).where(eq(feeEntries.parentFeeEntryId, feeEntryId));
+    // Only a RECEIVED entry owns commission children to cascade.
+    if (entry.type === "RECEIVED") {
+      await tx.delete(feeEntries).where(eq(feeEntries.parentFeeEntryId, feeEntryId));
+    }
     await tx.delete(feeEntries).where(eq(feeEntries.id, feeEntryId));
   });
   return { id: feeEntryId, deleted: true };
