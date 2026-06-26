@@ -16,7 +16,9 @@ import {
   addProcedure,
   addTask,
   archiveMatter,
+  createAuditSink,
   getArchiveChecklist,
+  listAudit,
   applyDeadlineRules,
   completeDeadline,
   completeTask,
@@ -60,12 +62,10 @@ function getSecret(): string {
 /** Deps. `secret` is only needed by token-issuing use cases (login). */
 function buildDeps(secret = ""): Deps {
   const url = process.env.LAWLINK_DB_URL ?? "file:./lawlink.db";
-  return {
-    db: createDb(url),
-    ids: { newId: () => randomUUID() },
-    clock: { now: () => new Date() },
-    secrets: { jwt: secret },
-  };
+  const db = createDb(url);
+  const ids = { newId: () => randomUUID() };
+  const clock = { now: () => new Date() };
+  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock) };
 }
 
 /** Resolve the caller: a verified token if given, else an env stub (dev only). */
@@ -361,6 +361,18 @@ deadline
   .option("--token <token>", "登录态")
   .action((opts) =>
     run(async () => completeDeadline(buildDeps(), await resolveAuth(opts.token), { deadlineId: opts.deadlineId })),
+  );
+
+program
+  .command("audit")
+  .description("审计日志（仅 ADMIN）")
+  .option("--action <a>", "按 action 过滤")
+  .option("--limit <n>", "条数", "50")
+  .option("--token <token>")
+  .action((opts) =>
+    run(async () =>
+      listAudit(buildDeps(), await resolveAuth(opts.token), { action: opts.action, limit: Number(opts.limit) }),
+    ),
   );
 
 // ── archive ───────────────────────────────────────────────────────────────────

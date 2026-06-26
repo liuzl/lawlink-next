@@ -32,6 +32,7 @@ export async function login(deps: Deps, rawInput: unknown): Promise<LoginResult>
 
   const role = user.role as Role;
   const token = await issueToken(deps.secrets.jwt, { userId: user.id, role });
+  await deps.audit.record({ userId: user.id }, { action: "LOGIN" });
   return {
     token,
     user: { id: user.id, name: user.name, email: user.email, role },

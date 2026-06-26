@@ -15,7 +15,9 @@ import {
   addHearing,
   addNote,
   archiveMatter,
+  createAuditSink,
   getArchiveChecklist,
+  listAudit,
   addProcedure,
   addTask,
   applyDeadlineRules,
@@ -58,13 +60,20 @@ function getSecret(): string {
   return requireJwtSecret(process.env.LAWLINK_JWT_SECRET);
 }
 
-/** `secret` is only needed by token-issuing routes (login). */
-function buildDeps(secret = ""): Deps {
+/** `secret` is only needed by token-issuing routes (login). `ctx` carries the
+ * request ip/userAgent for the audit trail. */
+function buildDeps(secret = "", ctx?: { ip?: string; userAgent?: string }): Deps {
+  const db = createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db");
+  const ids = { newId: () => randomUUID() };
+  const clock = { now: () => new Date() };
+  return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock, ctx) };
+}
+
+/** Audit context (ip / user-agent) from a request. */
+function auditCtx(c: Context): { ip?: string; userAgent?: string } {
   return {
-    db: createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db"),
-    ids: { newId: () => randomUUID() },
-    clock: { now: () => new Date() },
-    secrets: { jwt: secret },
+    ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip"),
+    userAgent: c.req.header("user-agent"),
   };
 }
 
@@ -102,9 +111,23 @@ app.get("/api/dashboard", requireAuth, async (c) => {
   }
 });
 
+app.get("/api/audit", requireAuth, async (c) => {
+  try {
+    const limit = c.req.query("limit");
+    return c.json(
+      await listAudit(buildDeps(), c.get("auth"), {
+        action: c.req.query("action"),
+        limit: limit ? Number(limit) : undefined,
+      }),
+    );
+  } catch (err) {
+    return fail(c, err);
+  }
+});
+
 app.post("/api/auth/login", async (c) => {
   try {
-    return c.json(await login(buildDeps(getSecret()), await c.req.json()));
+    return c.json(await login(buildDeps(getSecret(), auditCtx(c)), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -142,7 +165,7 @@ app.post("/api/intakes/:id/decline", requireAuth, async (c) => {
   try {
     const body = await c.req.json<{ reason: string }>();
     return c.json(
-      await declineIntake(buildDeps(), c.get("auth"), {
+      await declineIntake(buildDeps("", auditCtx(c)), c.get("auth"), {
         intakeId: c.req.param("id"),
         reason: body.reason,
       }),
@@ -155,7 +178,7 @@ app.post("/api/intakes/:id/decline", requireAuth, async (c) => {
 app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
   try {
     return c.json(
-      await convertIntake(buildDeps(), c.get("auth"), { intakeId: c.req.param("id") }),
+      await convertIntake(buildDeps("", auditCtx(c)), c.get("auth"), { intakeId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -297,7 +320,7 @@ app.get("/api/matters/:id/archive-checklist", requireAuth, async (c) => {
 app.post("/api/matters/:id/archive", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await archiveMatter(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+    return c.json(await archiveMatter(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -313,7 +336,7 @@ app.get("/api/matters/:id/finance", requireAuth, async (c) => {
 app.post("/api/matters/:id/fee-entries", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await createFeeEntry(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await createFeeEntry(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -321,14 +344,14 @@ app.post("/api/matters/:id/fee-entries", requireAuth, async (c) => {
 app.post("/api/matters/:id/commission-plan", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await setCommissionPlan(buildDeps(), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+    return c.json(await setCommissionPlan(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/fee-entries/:id/delete", requireAuth, async (c) => {
   try {
-    return c.json(await deleteFeeEntry(buildDeps(), c.get("auth"), { feeEntryId: c.req.param("id") }));
+    return c.json(await deleteFeeEntry(buildDeps("", auditCtx(c)), c.get("auth"), { feeEntryId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }

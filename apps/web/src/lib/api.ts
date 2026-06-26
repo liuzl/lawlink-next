@@ -142,6 +142,16 @@ export interface DashboardData {
   expiringPreservations: DashPreservation[];
   horizonDays: number;
 }
+export interface AuditRow {
+  id: string;
+  userId: string | null;
+  action: string;
+  targetType: string | null;
+  targetId: string | null;
+  detailJson: string | null;
+  ip: string | null;
+  createdAt: string;
+}
 export interface ClientRow {
   id: string;
   name: string;
@@ -281,6 +291,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ plans }),
     }),
+  getAudit: (action?: string) =>
+    req<AuditRow[]>(`/audit${action ? `?action=${encodeURIComponent(action)}` : ""}`),
   getArchiveChecklist: (matterId: string) =>
     req<{ required: string[]; status: string }>(`/matters/${matterId}/archive-checklist`),
   archiveMatter: (matterId: string, body: Record<string, unknown>) =>

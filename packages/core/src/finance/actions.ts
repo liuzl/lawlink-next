@@ -67,6 +67,12 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
       );
     }
   });
+  await deps.audit.record(auth, {
+    action: "COMMISSION_PLAN_SET",
+    targetType: "Matter",
+    targetId: input.matterId,
+    detail: { count: quantized.length },
+  });
   return { matterId: input.matterId, count: input.plans.length };
 }
 
@@ -90,7 +96,7 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   const now = deps.clock.now();
   const occurredAt = input.occurredAt ?? now;
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const id = deps.ids.newId();
     await tx.insert(feeEntries).values({
       id,
@@ -148,6 +154,14 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
     }
     return { id, type: input.type, amount: input.amount, commissionsGenerated: commissions };
   });
+
+  await deps.audit.record(auth, {
+    action: "FEE_ENTRY_CREATE",
+    targetType: "FeeEntry",
+    targetId: result.id,
+    detail: { type: result.type, amount: result.amount, commissions: result.commissionsGenerated },
+  });
+  return result;
 }
 
 export const DeleteFeeEntryInput = z.object({ feeEntryId: z.string().min(1) });
@@ -177,6 +191,12 @@ export async function deleteFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
       await tx.delete(feeEntries).where(eq(feeEntries.parentFeeEntryId, feeEntryId));
     }
     await tx.delete(feeEntries).where(eq(feeEntries.id, feeEntryId));
+  });
+  await deps.audit.record(auth, {
+    action: "FEE_ENTRY_DELETE",
+    targetType: "FeeEntry",
+    targetId: feeEntryId,
+    detail: { type: entry.type },
   });
   return { id: feeEntryId, deleted: true };
 }

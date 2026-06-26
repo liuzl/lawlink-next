@@ -337,6 +337,26 @@ export const archiveRecords = sqliteTable(
   (t) => [uniqueIndex("ArchiveRecord_matter_uq").on(t.matterId)],
 );
 
+/** Audit log (审计, DOMAIN-SPEC §4.12, §7) — append-only; not business-deletable. */
+export const auditLogs = sqliteTable(
+  "AuditLog",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id"),
+    action: text("action").notNull(),
+    targetType: text("target_type"),
+    targetId: text("target_id"),
+    detailJson: text("detail_json"),
+    ip: text("ip"),
+    userAgent: text("user_agent"),
+    createdAt: integer("created_at", { mode: "timestamp" }).notNull(),
+  },
+  (t) => [
+    index("AuditLog_user_idx").on(t.userId, t.createdAt),
+    index("AuditLog_action_idx").on(t.action, t.createdAt),
+  ],
+);
+
 /** Atomic named counters (internalCode sequences, etc.). */
 export const counters = sqliteTable("Counter", {
   key: text("key").primaryKey(),

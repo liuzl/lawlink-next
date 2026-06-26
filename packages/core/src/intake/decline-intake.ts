@@ -50,5 +50,11 @@ export async function declineIntake(
     );
   }
 
+  await deps.audit.record(auth, {
+    action: "INTAKE_DECLINE",
+    targetType: "Intake",
+    targetId: intakeId,
+    detail: { reason },
+  });
   return { id: intakeId, status: "DECLINED", reason };
 }

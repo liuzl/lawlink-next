@@ -39,7 +39,7 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
   const input = ArchiveMatterInput.parse(rawInput);
   const now = deps.clock.now();
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     const [m] = await tx
       .select({ category: matters.category, ownerId: matters.ownerId, status: matters.status })
       .from(matters)
@@ -118,4 +118,14 @@ export async function archiveMatter(deps: Deps, auth: AuthContext, rawInput: unk
       alreadyArchived: false,
     };
   });
+
+  if (!result.alreadyArchived) {
+    await deps.audit.record(auth, {
+      action: "MATTER_ARCHIVE",
+      targetType: "Matter",
+      targetId: input.matterId,
+      detail: { forced: result.forced, missingCount: result.missingItems.length },
+    });
+  }
+  return result;
 }

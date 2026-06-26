@@ -55,6 +55,19 @@ export interface Deps {
   ids: IdGen;
   clock: Clock;
   secrets: Secrets;
+  audit: AuditSink;
+}
+
+/** Append-only audit trail (DOMAIN-SPEC §4.12). `record` is best-effort and
+ * must never throw — auditing failures cannot break the main operation. */
+export interface AuditEntry {
+  action: string;
+  targetType?: string;
+  targetId?: string;
+  detail?: unknown;
+}
+export interface AuditSink {
+  record(actor: { userId: string }, entry: AuditEntry): Promise<void>;
 }
 
 export interface Secrets {

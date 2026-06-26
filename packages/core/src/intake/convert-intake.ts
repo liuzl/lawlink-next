@@ -34,7 +34,7 @@ export async function convertIntake(
   const now = deps.clock.now();
   const year = now.getFullYear();
 
-  return await deps.db.transaction(async (tx) => {
+  const result = await deps.db.transaction(async (tx) => {
     // 1. Atomically claim the intake (only if not already terminal).
     const [intake] = await tx
       .update(intakes)
@@ -84,4 +84,12 @@ export async function convertIntake(
 
     return { matterId, internalCode, intakeId, status: "CONVERTED" as const };
   });
+
+  await deps.audit.record(auth, {
+    action: "INTAKE_CONVERT",
+    targetType: "Matter",
+    targetId: result.matterId,
+    detail: { internalCode: result.internalCode, intakeId: result.intakeId },
+  });
+  return result;
 }
