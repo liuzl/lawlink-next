@@ -8,8 +8,8 @@
  */
 import { z } from "zod";
 import { eq, or } from "drizzle-orm";
-import { conflictChecks, parties } from "@lawlink/db";
-import type { AuthContext, Deps } from "../types.js";
+import { conflictChecks, intakes, parties } from "@lawlink/db";
+import { DomainError, type AuthContext, type Deps } from "../types.js";
 
 export type PartyRole = "CLIENT_PARTY" | "OPPOSING_PARTY" | "THIRD_PARTY";
 export type Severity = "NONE" | "LOW" | "MEDIUM" | "HIGH" | "BLOCKING";
@@ -71,6 +71,17 @@ export async function runConflictCheck(
 ): Promise<ConflictResult> {
   const input = ConflictQueryInput.parse(rawInput);
   const candidate = input.candidateRole as PartyRole;
+
+  // The audit link must reference a real intake, or it cannot be trusted by an
+  // approver. Validate existence before persisting a caller-supplied intakeId.
+  if (input.intakeId) {
+    const [intake] = await deps.db
+      .select({ id: intakes.id })
+      .from(intakes)
+      .where(eq(intakes.id, input.intakeId))
+      .limit(1);
+    if (!intake) throw new DomainError("NOT_FOUND", "关联收案不存在");
+  }
 
   const predicates = [];
   if (input.name) predicates.push(eq(parties.name, input.name));
