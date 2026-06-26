@@ -62,8 +62,15 @@ const DL_CAT_CN: Record<string, string> = {
   CUSTOM: "自定义",
 };
 
+/** Whole-calendar-day diff (local time): 0 = due today, <0 = overdue (the first
+ * calendar day after the due date), >0 = days remaining. Avoids the timezone /
+ * fractional-instant bugs of comparing raw millisecond timestamps. */
 function dueDays(dueAt: string): number {
-  return Math.ceil((new Date(dueAt).getTime() - Date.now()) / 86400000);
+  const [y, m, d] = dueAt.slice(0, 10).split("-").map(Number);
+  const due = new Date(y, (m ?? 1) - 1, d ?? 1);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.round((due.getTime() - today.getTime()) / 86400000);
 }
 
 export function MatterDetail() {
@@ -71,6 +78,7 @@ export function MatterDetail() {
   const [matter, setMatter] = useState<MatterDetailData | null>(null);
   const [deadlines, setDeadlines] = useState<DeadlineRow[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const [dlError, setDlError] = useState<string | null>(null);
   const [type, setType] = useState("");
   const [caseNumber, setCaseNumber] = useState("");
   const [dlProc, setDlProc] = useState("");
@@ -87,15 +95,24 @@ export function MatterDetail() {
     setMatter(null);
     setDeadlines([]);
     setError(null);
-    Promise.all([api.getMatter(id), api.listDeadlines(id)])
-      .then(([m, dl]) => {
-        if (active) {
-          setMatter(m);
-          setDeadlines(dl);
-        }
+    setDlError(null);
+    // Matter gates the page; deadlines load independently with a degraded card
+    // so a deadlines failure can't blank the whole matter view.
+    api
+      .getMatter(id)
+      .then((m) => {
+        if (active) setMatter(m);
       })
       .catch((err) => {
         if (active) setError(err instanceof Error ? err.message : String(err));
+      });
+    api
+      .listDeadlines(id)
+      .then((dl) => {
+        if (active) setDeadlines(dl);
+      })
+      .catch((err) => {
+        if (active) setDlError(err instanceof Error ? err.message : String(err));
       });
     return () => {
       active = false;
@@ -104,12 +121,16 @@ export function MatterDetail() {
 
   async function refresh() {
     try {
-      const [m, dl] = await Promise.all([api.getMatter(id), api.listDeadlines(id)]);
-      setMatter(m);
-      setDeadlines(dl);
+      setMatter(await api.getMatter(id));
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+    try {
+      setDeadlines(await api.listDeadlines(id));
+      setDlError(null);
+    } catch (err) {
+      setDlError(err instanceof Error ? err.message : String(err));
     }
   }
 
@@ -270,6 +291,7 @@ export function MatterDetail() {
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-2">
+          {dlError && <p className="text-xs text-destructive">期限加载失败：{dlError}</p>}
           {deadlines.map((d) => {
             const days = dueDays(d.dueAt);
             const overdue = !d.completed && days < 0;
