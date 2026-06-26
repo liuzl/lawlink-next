@@ -9,7 +9,7 @@
  * audit guarantees apply; this module only adds parsing, matching and tracking.
  */
 import { z } from "zod";
-import { and, desc, eq, inArray, or } from "drizzle-orm";
+import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
 import { matterProcedures, matters, smsMessages } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
@@ -245,13 +245,25 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
 
   // addHearing enforces matter write access + audits; we just thread the data.
-  const hearing = await addHearing(deps, auth, {
-    procedureId,
-    title: input.title ?? `开庭（${parsed.court ?? "法院"}）`,
-    startsAt,
-    room: parsed.courtRoom ?? undefined,
-    judge: parsed.judge ?? undefined,
-  });
+  // If it throws (e.g. the matter was archived in the race window AFTER our
+  // preflight), roll the claim back so the SMS is retryable — but only while no
+  // generated id was written, so a success is never un-processed.
+  let hearing: { id: string };
+  try {
+    hearing = await addHearing(deps, auth, {
+      procedureId,
+      title: input.title ?? `开庭（${parsed.court ?? "法院"}）`,
+      startsAt,
+      room: parsed.courtRoom ?? undefined,
+      judge: parsed.judge ?? undefined,
+    });
+  } catch (err) {
+    await deps.db
+      .update(smsMessages)
+      .set({ processed: false, processedAt: null, updatedAt: deps.clock.now() })
+      .where(and(eq(smsMessages.id, r.id), isNull(smsMessages.generatedHearingId)));
+    throw err;
+  }
   await deps.db
     .update(smsMessages)
     .set({ generatedHearingId: hearing.id, updatedAt: deps.clock.now() })
@@ -303,13 +315,24 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
     .returning({ id: smsMessages.id });
   if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理，无法重复生成");
 
-  const deadline = await addDeadline(deps, auth, {
-    procedureId,
-    title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
-    dueAt,
-    category: input.category ?? "CUSTOM",
-    basis: parsed.summary,
-  });
+  // Roll the claim back if creation throws in the race window — same retryable
+  // guard as gen-hearing (only while no generated id was written).
+  let deadline: { id: string };
+  try {
+    deadline = await addDeadline(deps, auth, {
+      procedureId,
+      title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
+      dueAt,
+      category: input.category ?? "CUSTOM",
+      basis: parsed.summary,
+    });
+  } catch (err) {
+    await deps.db
+      .update(smsMessages)
+      .set({ processed: false, processedAt: null, updatedAt: deps.clock.now() })
+      .where(and(eq(smsMessages.id, r.id), isNull(smsMessages.generatedDeadlineId)));
+    throw err;
+  }
   await deps.db
     .update(smsMessages)
     .set({ generatedDeadlineId: deadline.id, updatedAt: deps.clock.now() })
