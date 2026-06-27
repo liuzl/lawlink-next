@@ -1,10 +1,10 @@
 /** Property-preservation use cases (DOMAIN-SPEC §6.5, §9.2). */
 import { z } from "zod";
-import { and, asc, eq, gte, inArray, lt, notInArray } from "drizzle-orm";
+import { and, asc, eq, gte, inArray, lt, notInArray, sql } from "drizzle-orm";
 import { matters, preservationRenewals, preservations } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 import { enqueueNotification } from "../notification/actions.js";
 import { DEFAULT_DURATION_DAYS, addDays, type PreservationPropertyType } from "./rules.js";
@@ -78,69 +78,82 @@ export async function renewPreservation(deps: Deps, auth: AuthContext, rawInput:
   const input = RenewPreservationInput.parse(rawInput);
   const now = deps.clock.now();
 
-  const result = await deps.db.transaction(async (tx) => {
-    const [p] = await tx
-      .select({ matterId: preservations.matterId, expiryDate: preservations.expiryDate, status: preservations.status })
-      .from(preservations)
-      .where(eq(preservations.id, input.preservationId))
-      .limit(1);
-    if (!p) throw new DomainError("NOT_FOUND", "保全不存在");
+  // Preflight reads/validations (gate the write; precise error messages).
+  const [p] = await deps.db
+    .select({ matterId: preservations.matterId, expiryDate: preservations.expiryDate, status: preservations.status })
+    .from(preservations)
+    .where(eq(preservations.id, input.preservationId))
+    .limit(1);
+  if (!p) throw new DomainError("NOT_FOUND", "保全不存在");
 
-    const [matter] = await tx
-      .select({ id: matters.id, ownerId: matters.ownerId, status: matters.status })
-      .from(matters)
-      .where(eq(matters.id, p.matterId))
-      .limit(1);
-    if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-    await assertMatterAccess(deps.db, matter, auth);
-    if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
+  const [matter] = await deps.db
+    .select({ id: matters.id, ownerId: matters.ownerId, status: matters.status })
+    .from(matters)
+    .where(eq(matters.id, p.matterId))
+    .limit(1);
+  if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
+  await assertMatterAccess(deps.db, matter, auth);
+  if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读");
 
-    // Renewal extends a STILL-ACTIVE preservation. A lapsed (EXPIRED or
-    // past-expiry) or lifted window must NOT be "renewed" — that would hide the
-    // lapse; re-protecting after a lapse is a NEW preservation (audit honesty).
-    if (p.status === "LIFTED") throw new DomainError("INVALID_STATE", "保全已解除，不能续保");
-    if (p.status === "EXPIRED" || p.expiryDate <= now) {
-      throw new DomainError("INVALID_STATE", "保全已到期失效，应重新申请保全，而非续保");
-    }
-    if (input.newExpiryDate <= p.expiryDate) {
-      throw new DomainError("VALIDATION", "续保到期日必须晚于当前到期日");
-    }
+  // Renewal extends a STILL-ACTIVE preservation. A lapsed (EXPIRED or
+  // past-expiry) or lifted window must NOT be "renewed" — that would hide the
+  // lapse; re-protecting after a lapse is a NEW preservation (audit honesty).
+  if (p.status === "LIFTED") throw new DomainError("INVALID_STATE", "保全已解除，不能续保");
+  if (p.status === "EXPIRED" || p.expiryDate <= now) {
+    throw new DomainError("INVALID_STATE", "保全已到期失效，应重新申请保全，而非续保");
+  }
+  if (input.newExpiryDate <= p.expiryDate) {
+    throw new DomainError("VALIDATION", "续保到期日必须晚于当前到期日");
+  }
 
-    // Predicate-guarded update: if a concurrent scan flipped it to EXPIRED (or
-    // it was lifted) between read and write, 0 rows change → reject.
-    const updated = await tx
-      .update(preservations)
-      .set({ expiryDate: input.newExpiryDate, status: "RENEWED" })
-      .where(
-        and(
-          eq(preservations.id, input.preservationId),
-          inArray(preservations.status, ["ACTIVE", "RENEWED"]),
-          gte(preservations.expiryDate, now),
-        ),
-      )
-      .returning({ id: preservations.id });
-    if (updated.length === 0) {
-      throw new DomainError("INVALID_STATE", "保全状态已变更（已到期/已解除），不能续保");
-    }
+  // Atomic renewal in one batch() — one transaction on libSQL AND D1. Both the
+  // renewal-record insert AND the preservation update are guarded by the SAME
+  // PRE-state predicate (still ACTIVE/RENEWED, expiry UNCHANGED since the read —
+  // a compare-and-swap — not lapsed, AND the matter still writable, i.e. not
+  // archived / access not lost — re-checked at write time, not trusted from the
+  // preflight). The insert runs FIRST so it sees the intact pre-state; the update
+  // then advances it. If a concurrent scan flipped it to EXPIRED, it was lifted,
+  // another renewal already moved the expiry, or the matter was archived between
+  // preflight and batch, BOTH statements match 0 rows and the renewal no-ops
+  // (rejected below) — we never log a renewal record without actually renewing,
+  // nor renew a read-only archived matter. epoch seconds.
+  const renewedSec = Math.floor(now.getTime() / 1000);
+  const nowSec = renewedSec;
+  const oldExpirySec = Math.floor(p.expiryDate.getTime() / 1000);
+  const newExpirySec = Math.floor(input.newExpiryDate.getTime() / 1000);
+  const renewalId = deps.ids.newId();
+  const matterGuard = matterWriteAccessExists(auth, p.matterId);
+  const preState = sql`exists (select 1 from "Preservation" where "id" = ${input.preservationId} and "status" in ('ACTIVE','RENEWED') and "expiry_date" = ${oldExpirySec} and "expiry_date" >= ${nowSec}) and ${matterGuard}`;
 
-    await tx.insert(preservationRenewals).values({
-      id: deps.ids.newId(),
-      preservationId: input.preservationId,
-      oldExpiryDate: p.expiryDate,
-      newExpiryDate: input.newExpiryDate,
-      renewedAt: now,
-      performedById: auth.userId,
-      note: input.note ?? null,
-    });
+  const insRenewal = deps.db.insert(preservationRenewals).select(sql`
+    select ${renewalId}, ${input.preservationId}, ${oldExpirySec}, ${newExpirySec}, ${renewedSec}, ${auth.userId}, ${input.note ?? null}
+    where ${preState}
+  `);
+  const claim = deps.db
+    .update(preservations)
+    .set({ expiryDate: input.newExpiryDate, status: "RENEWED" })
+    .where(
+      and(
+        eq(preservations.id, input.preservationId),
+        inArray(preservations.status, ["ACTIVE", "RENEWED"]),
+        eq(preservations.expiryDate, p.expiryDate),
+        gte(preservations.expiryDate, now),
+        matterGuard,
+      ),
+    )
+    .returning({ id: preservations.id });
+  const results = await deps.db.batch([insRenewal, claim]);
+  if ((results[1] as unknown[]).length === 0) {
+    throw new DomainError("INVALID_STATE", "保全状态已变更（已到期/已解除），不能续保");
+  }
 
-    return {
-      id: input.preservationId,
-      matterId: p.matterId,
-      oldExpiryDate: p.expiryDate,
-      newExpiryDate: input.newExpiryDate,
-      status: "RENEWED" as const,
-    };
-  });
+  const result = {
+    id: input.preservationId,
+    matterId: p.matterId,
+    oldExpiryDate: p.expiryDate,
+    newExpiryDate: input.newExpiryDate,
+    status: "RENEWED" as const,
+  };
 
   await deps.audit.record(auth, {
     action: "PRESERVATION_RENEW",

@@ -15,7 +15,7 @@ import { and, asc, desc, eq, isNull, sql } from "drizzle-orm";
 import { documentFolders, documents, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 
 /** Hex SHA-256 of bytes via Web Crypto (Node ≥20 + Workers). */
@@ -81,55 +81,45 @@ export async function registerDocument(deps: Deps, auth: AuthContext, rawInput: 
 
   const now = deps.clock.now();
   const id = deps.ids.newId();
-  // Re-validate matter (not archived) AND folder placement INSIDE the txn, right
-  // before the insert, so an archive/folder-delete landing after the preflight
-  // can't slip a material onto a closed case or a vanished folder.
-  await deps.db.transaction(async (tx) => {
-    const [m] = await tx
-      .select({ status: matters.status })
-      .from(matters)
-      .where(eq(matters.id, input.matterId))
+
+  // Folder preflight (precise "卷宗不属于本案件" message for the common case).
+  if (input.folderId) {
+    const [f] = await deps.db
+      .select({ matterId: documentFolders.matterId })
+      .from(documentFolders)
+      .where(eq(documentFolders.id, input.folderId))
       .limit(1);
-    if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-    if (m.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能登记材料");
-    if (input.folderId) {
-      const [f] = await tx
-        .select({ matterId: documentFolders.matterId })
-        .from(documentFolders)
-        .where(eq(documentFolders.id, input.folderId))
-        .limit(1);
-      if (!f || f.matterId !== input.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
-    }
-    await tx.insert(documents).values({
-      id,
-      matterId: input.matterId,
-      intakeId: null,
-      procedureId: null,
-      folderId: input.folderId ?? null,
-      name: input.name,
-      category: input.category,
-      sourceParty: input.sourceParty ?? null,
-      status: "DRAFT",
-      reviewedById: null,
-      reviewedAt: null,
-      approvedById: null,
-      approvedAt: null,
-      version: 1,
-      isLatest: true,
-      familyId: null,
-      storageKey: storage?.storageKey ?? null,
-      mimeType: storage?.mimeType ?? null,
-      size: storage?.size ?? null,
-      sha256: storage?.sha256 ?? null,
-      templateId: storage?.templateId ?? null,
-      templateContextJson: storage?.templateContextJson ?? null,
-      tagsJson: JSON.stringify(input.tags ?? []),
-      uploadedById: auth.userId,
-      deletedAt: null,
-      createdAt: now,
-      updatedAt: now,
-    });
-  });
+    if (!f || f.matterId !== input.matterId) throw new DomainError("VALIDATION", "卷宗不属于本案件");
+  }
+
+  // Re-validate matter writability (exists, not archived, caller STILL has write
+  // access) AND folder placement at WRITE time as a guarded INSERT … SELECT …
+  // WHERE (the D1-compatible replacement for the in-tx re-read — D1 has no
+  // interactive transactions). If an archive, an access change, or a
+  // folder-delete lands after the preflight (TOCTOU), the correlated guards match
+  // 0 rows and nothing is inserted. Single-statement, so it serializes with
+  // deleteFolder's guarded DELETE. created_at/updated_at are epoch seconds.
+  const createdSec = Math.floor(now.getTime() / 1000);
+  const folderGuard = input.folderId
+    ? sql`and exists (select 1 from "DocumentFolder" where "id" = ${input.folderId} and "matter_id" = ${input.matterId})`
+    : sql``;
+  const inserted = (await deps.db.all(sql`
+    insert into ${documents}
+      ("id", "matter_id", "intake_id", "procedure_id", "folder_id", "name", "category", "source_party",
+       "status", "reviewed_by_id", "reviewed_at", "approved_by_id", "approved_at", "version", "is_latest",
+       "family_id", "template_id", "template_context_json", "storage_key", "mime_type", "size", "sha256",
+       "tags_json", "uploaded_by_id", "deleted_at", "created_at", "updated_at")
+    select ${id}, ${input.matterId}, null, null, ${input.folderId ?? null}, ${input.name}, ${input.category}, ${input.sourceParty ?? null},
+       'DRAFT', null, null, null, null, 1, 1,
+       null, ${storage?.templateId ?? null}, ${storage?.templateContextJson ?? null}, ${storage?.storageKey ?? null}, ${storage?.mimeType ?? null}, ${storage?.size ?? null}, ${storage?.sha256 ?? null},
+       ${JSON.stringify(input.tags ?? [])}, ${auth.userId}, null, ${createdSec}, ${createdSec}
+    where ${matterWriteAccessExists(auth, input.matterId)}
+      ${folderGuard}
+    returning "id"
+  `)) as unknown[];
+  if (inserted.length === 0) {
+    throw new DomainError("INVALID_STATE", "案件已归档或目标卷宗不存在");
+  }
   await deps.audit.record(auth, {
     action: "DOCUMENT_REGISTER",
     targetType: "Document",
