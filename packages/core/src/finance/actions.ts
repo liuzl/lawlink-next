@@ -114,40 +114,62 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   const occurredAt = input.occurredAt ?? now;
 
   const id = deps.ids.newId();
-  const parent = deps.db.insert(feeEntries).values({
-    id,
-    matterId: input.matterId,
-    billingId: null,
-    type: input.type,
-    amount: input.amount,
-    occurredAt,
-    invoiceNo: null,
-    payerOrPayee: input.payerOrPayee ?? null,
-    method: input.method ?? null,
-    note: input.note ?? null,
-    parentFeeEntryId: null,
-    beneficiaryUserId: null,
-    recordedById: auth.userId,
-    createdAt: now,
-  });
+  const occurredSec = Math.floor(occurredAt.getTime() / 1000);
+  const createdSec = Math.floor(now.getTime() / 1000);
+
+  // A non-RECEIVED entry spawns no commissions — a plain insert, no plan involved.
+  if (input.type !== "RECEIVED") {
+    await deps.db.insert(feeEntries).values({
+      id,
+      matterId: input.matterId,
+      billingId: null,
+      type: input.type,
+      amount: input.amount,
+      occurredAt,
+      invoiceNo: null,
+      payerOrPayee: input.payerOrPayee ?? null,
+      method: input.method ?? null,
+      note: input.note ?? null,
+      parentFeeEntryId: null,
+      beneficiaryUserId: null,
+      recordedById: auth.userId,
+      createdAt: now,
+    });
+    await deps.audit.record(auth, {
+      action: "FEE_ENTRY_CREATE",
+      targetType: "FeeEntry",
+      targetId: id,
+      detail: { type: input.type, amount: input.amount, commissions: 0 },
+    });
+    return { id, type: input.type, amount: input.amount, commissionsGenerated: 0 };
+  }
 
   // A RECEIVED entry atomically spawns COMMISSION children per the active plan.
-  // The plan is read just before the batch; the parent + all children then insert
-  // in ONE batch() — a single transaction on libSQL AND D1 (D1 has no interactive
-  // transactions) — so the COMMISSION children never exist without their parent.
-  // (The plan read is outside the batch: a concurrent setCommissionPlan could
-  // race, but that was always a same-instant ambiguity; atomicity of the spawn is
-  // what matters.)
-  const childInserts: (typeof parent)[] = [];
-  if (input.type === "RECEIVED") {
+  // The plan is read, then the parent + all children insert in ONE batch() — a
+  // single transaction on libSQL AND D1 (D1 has no interactive transactions). To
+  // stop a concurrent setCommissionPlan from booking commissions against a plan
+  // that changed between the read and the write (silent ledger corruption), the
+  // PARENT insert is guarded by a compare-and-swap on the active plan-id SET
+  // (setCommissionPlan rewrites rows with fresh ids, so the id set is a faithful
+  // fingerprint); if it changed, the parent inserts 0 rows and we RETRY with the
+  // new plan. The children chain off `exists(parent)` within the same batch, so a
+  // failed CAS cascades them to no-ops too — children never outlive their parent,
+  // and the telescoping share math stays exact in JS. epoch seconds.
+  const receivedCents = toCents(input.amount);
+  const MAX_ATTEMPTS = 5;
+  let commissionsGenerated = 0;
+  for (let attempt = 1; ; attempt++) {
     const plans = await deps.db
       .select()
       .from(commissionPlans)
-      .where(and(eq(commissionPlans.matterId, input.matterId), eq(commissionPlans.active, true)));
-    const receivedCents = toCents(input.amount);
+      .where(and(eq(commissionPlans.matterId, input.matterId), eq(commissionPlans.active, true)))
+      .orderBy(asc(commissionPlans.id));
+    const planIds = plans.map((p) => p.id);
+
     // Cumulative (telescoping) allocation: each share is the difference of
     // running-cumulative rounded amounts, so the children sum EXACTLY to
     // round(received × Σpercent) and can never overpay the received amount.
+    const children: { id: string; amount: string; note: string | null; userId: string }[] = [];
     let cumPercent = 0;
     let prevCumCents = 0;
     for (const plan of plans) {
@@ -156,33 +178,39 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
       const shareCents = cumCents - prevCumCents;
       prevCumCents = cumCents;
       if (shareCents === 0) continue;
-      childInserts.push(
-        deps.db.insert(feeEntries).values({
-          id: deps.ids.newId(),
-          matterId: input.matterId,
-          billingId: null,
-          type: "COMMISSION",
-          amount: `-${fromCents(shareCents)}`,
-          occurredAt,
-          invoiceNo: null,
-          payerOrPayee: null,
-          method: null,
-          note: plan.label ?? null,
-          parentFeeEntryId: id,
-          beneficiaryUserId: plan.userId,
-          recordedById: auth.userId,
-          createdAt: now,
-        }),
-      );
+      children.push({ id: deps.ids.newId(), amount: `-${fromCents(shareCents)}`, note: plan.label ?? null, userId: plan.userId });
+    }
+
+    // CAS: the active plan-id set for this matter is exactly what we just read.
+    const idsUnchanged = planIds.length
+      ? sql` and not exists (select 1 from "CommissionPlan" where "matter_id" = ${input.matterId} and "active" = 1 and "id" not in (${sql.join(planIds.map((i) => sql`${i}`), sql`, `)}))`
+      : sql``;
+    const cas = sql`(select count(*) from "CommissionPlan" where "matter_id" = ${input.matterId} and "active" = 1) = ${planIds.length}${idsUnchanged}`;
+
+    const parentIns = deps.db
+      .insert(feeEntries)
+      .select(sql`
+        select ${id}, ${input.matterId}, null, 'RECEIVED', ${input.amount}, ${occurredSec}, null, ${input.payerOrPayee ?? null}, ${input.method ?? null}, ${input.note ?? null}, null, null, ${auth.userId}, ${createdSec}
+        where ${cas}
+      `)
+      .returning({ id: feeEntries.id });
+    const childIns = children.map((c) =>
+      deps.db.insert(feeEntries).select(sql`
+        select ${c.id}, ${input.matterId}, null, 'COMMISSION', ${c.amount}, ${occurredSec}, null, null, null, ${c.note}, ${id}, ${c.userId}, ${auth.userId}, ${createdSec}
+        where exists (select 1 from "FeeEntry" where "id" = ${id})
+      `),
+    );
+
+    const results = await deps.db.batch([parentIns, ...childIns] as [typeof parentIns, ...typeof childIns]);
+    if ((results[0] as unknown[]).length > 0) {
+      commissionsGenerated = children.length;
+      break;
+    }
+    if (attempt >= MAX_ATTEMPTS) {
+      throw new DomainError("CONFLICT", "分成方案在记账时被并发修改，请重试");
     }
   }
-
-  if (childInserts.length > 0) {
-    await deps.db.batch([parent, ...childInserts]);
-  } else {
-    await parent;
-  }
-  const result = { id, type: input.type, amount: input.amount, commissionsGenerated: childInserts.length };
+  const result = { id, type: input.type, amount: input.amount, commissionsGenerated };
 
   await deps.audit.record(auth, {
     action: "FEE_ENTRY_CREATE",

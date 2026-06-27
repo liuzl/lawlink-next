@@ -9,7 +9,7 @@ import { and, asc, eq, isNull, notExists, sql } from "drizzle-orm";
 import { documentFolders, documents, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 
 /** Transaction handle (structurally a db sans `batch`) — lets folder seeding run
@@ -87,39 +87,35 @@ export async function createFolder(deps: Deps, auth: AuthContext, rawInput: unkn
 
   const now = deps.clock.now();
   const id = deps.ids.newId();
-  let nextOrder = 0;
-  // Re-check matter status INSIDE the txn right before the insert so an archive
-  // landing after the preflight can't create a folder on a closed case.
+  const createdSec = Math.floor(now.getTime() / 1000);
+  // Single guarded INSERT … SELECT … WHERE (the D1-compatible replacement for the
+  // in-tx re-read — D1 has no interactive transactions). orderIndex is allocated
+  // INLINE via a correlated max+1 subquery (orderIndex isn't unique, so manual
+  // folders simply sort last; concurrent adds may share an index — harmless). The
+  // matterWriteAccessExists guard re-checks at write time that the matter exists,
+  // isn't archived, and the caller still has access, so an archive/access change
+  // after the preflight makes it match 0 rows. unique(matterId,name) collisions
+  // surface as an error → CONFLICT. created_at/updated_at are epoch seconds.
+  let inserted: { order_index: number }[];
   try {
-    await deps.db.transaction(async (tx) => {
-      const [m] = await tx
-        .select({ status: matters.status })
-        .from(matters)
-        .where(eq(matters.id, input.matterId))
-        .limit(1);
-      if (!m) throw new DomainError("NOT_FOUND", "案件不存在");
-      if (m.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能新增卷宗");
-      // Allocate orderIndex after the current max so manual folders sort last.
-      const existing = await tx
-        .select({ orderIndex: documentFolders.orderIndex })
-        .from(documentFolders)
-        .where(eq(documentFolders.matterId, input.matterId));
-      nextOrder = existing.reduce((mx, r) => Math.max(mx, r.orderIndex), -1) + 1;
-      await tx.insert(documentFolders).values({
-        id,
-        matterId: input.matterId,
-        name: input.name,
-        orderIndex: nextOrder,
-        isDefault: false,
-        createdAt: now,
-        updatedAt: now,
-      });
-    });
+    inserted = (await deps.db.all(sql`
+      insert into ${documentFolders}
+        ("id", "matter_id", "name", "order_index", "is_default", "created_at", "updated_at")
+      select ${id}, ${input.matterId}, ${input.name},
+        (select coalesce(max("order_index"), -1) + 1 from "DocumentFolder" where "matter_id" = ${input.matterId}),
+        0, ${createdSec}, ${createdSec}
+      where ${matterWriteAccessExists(auth, input.matterId)}
+      returning "order_index"
+    `)) as { order_index: number }[];
   } catch (err) {
     if (err instanceof DomainError) throw err;
     // Unique(matterId,name) collision → a folder with this name already exists.
     throw new DomainError("CONFLICT", `卷宗「${input.name}」已存在`);
   }
+  if (inserted.length === 0) {
+    throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能新增卷宗");
+  }
+  const nextOrder = inserted[0].order_index;
   await deps.audit.record(auth, {
     action: "FOLDER_CREATE",
     targetType: "DocumentFolder",

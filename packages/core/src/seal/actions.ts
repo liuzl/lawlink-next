@@ -133,45 +133,52 @@ export async function createSealRequest(deps: Deps, auth: AuthContext, rawInput:
   const now = deps.clock.now();
   const year = now.getFullYear();
   const id = deps.ids.newId();
-  let code = "";
+  const counterKey = `seal-${year}`;
+  // Atomic per-year sequence SEAL-{year}-{NNNN} + the request row in ONE batch()
+  // — a single transaction on libSQL AND D1 (D1 has no interactive transactions).
+  // The counter upsert (+1) is statement 1; the request insert (statement 2)
+  // reads the just-incremented value via a correlated subquery and formats the
+  // code with printf, so it sees statement 1's write within the same transaction
+  // without needing to pass a value between statements. On a unique
+  // (draftDocId | code) collision the whole batch rolls back — no wasted code.
+  let code: string;
+  const counterUpsert = deps.db
+    .insert(counters)
+    .values({ key: counterKey, value: 1 })
+    .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } });
+  const sealInsert = deps.db
+    .insert(sealRequests)
+    .values({
+      id,
+      code: sql`printf('SEAL-%d-%04d', ${year}, (select "value" from "Counter" where "key" = ${counterKey}))`,
+      sealType: input.sealType,
+      matterId,
+      purpose: input.purpose,
+      documentTitle: input.documentTitle,
+      pageCount: input.pageCount,
+      requireCrossPageSeal: input.requireCrossPageSeal,
+      copies: input.copies,
+      urgency: input.urgency,
+      draftDocId: input.draftDocId,
+      stampedDocId: null,
+      status: "PENDING",
+      requestNote: input.requestNote ?? null,
+      approveNote: null,
+      requestedById: auth.userId,
+      requestedAt: now,
+      approvedById: null,
+      approvedAt: null,
+      stampedById: null,
+      stampedAt: null,
+      rejectedAt: null,
+      parentSealRequestId: input.parentSealRequestId ?? null,
+      createdAt: now,
+      updatedAt: now,
+    })
+    .returning({ code: sealRequests.code });
   try {
-    code = await deps.db.transaction(async (tx) => {
-      // Atomic per-year sequence: SEAL-{year}-{NNNN}.
-      const [counter] = await tx
-        .insert(counters)
-        .values({ key: `seal-${year}`, value: 1 })
-        .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
-        .returning({ value: counters.value });
-      const c = `SEAL-${year}-${String(counter.value).padStart(4, "0")}`;
-      await tx.insert(sealRequests).values({
-        id,
-        code: c,
-        sealType: input.sealType,
-        matterId,
-        purpose: input.purpose,
-        documentTitle: input.documentTitle,
-        pageCount: input.pageCount,
-        requireCrossPageSeal: input.requireCrossPageSeal,
-        copies: input.copies,
-        urgency: input.urgency,
-        draftDocId: input.draftDocId,
-        stampedDocId: null,
-        status: "PENDING",
-        requestNote: input.requestNote ?? null,
-        approveNote: null,
-        requestedById: auth.userId,
-        requestedAt: now,
-        approvedById: null,
-        approvedAt: null,
-        stampedById: null,
-        stampedAt: null,
-        rejectedAt: null,
-        parentSealRequestId: input.parentSealRequestId ?? null,
-        createdAt: now,
-        updatedAt: now,
-      });
-      return c;
-    });
+    const results = await deps.db.batch([counterUpsert, sealInsert]);
+    code = (results[1] as { code: string }[])[0].code;
   } catch {
     // The only realistic conflict is the unique draftDocId (one draft = one seal).
     throw new DomainError("CONFLICT", "该待盖章稿已被其他用印申请占用");
