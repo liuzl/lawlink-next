@@ -61,6 +61,23 @@ export function matterWriteAccessExists(auth: AuthContext, matterId: string): SQ
   return sql`exists (select 1 from "Matter" m where m."id" = ${matterId} and m."status" <> 'ARCHIVED' and (${access}))`;
 }
 
+/**
+ * Like matterWriteAccessExists but for OWNER-level, finance-sensitive writes
+ * (commission plans, invoice requests): true iff the matter exists and the caller
+ * is management OR its current owner (LAWYER). No archived check — finance edits
+ * are allowed on closed matters. Embed in guarded writes so ownership is
+ * re-checked atomically at write time (a stale owner can't mutate after a
+ * concurrent ownership transfer).
+ */
+export function matterOwnerAccessExists(auth: AuthContext, matterId: string): SQL {
+  const access = isManagement(auth)
+    ? sql`1=1`
+    : auth.role === "LAWYER"
+      ? sql`m."owner_id" = ${auth.userId}`
+      : sql`0=1`;
+  return sql`exists (select 1 from "Matter" m where m."id" = ${matterId} and (${access}))`;
+}
+
 /** Throw NOT_FOUND (not FORBIDDEN) so callers can't probe matter existence. */
 export async function assertMatterAccess(
   db: Deps["db"],

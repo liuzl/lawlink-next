@@ -1,10 +1,10 @@
 /** Finance: billings, fee entries, commission auto-calc (DOMAIN-SPEC §4.11, §6.3). */
 import { z } from "zod";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, sql } from "drizzle-orm";
 import { commissionPlans, feeEntries, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
-import { assertMatterOwnerAccess } from "../matter/access.js";
+import { assertMatterOwnerAccess, matterOwnerAccessExists } from "../matter/access.js";
 import { fromCents, percentOfCents, toCents } from "./money.js";
 
 const AMOUNT = z.string().regex(/^\d+(\.\d{1,2})?$/, "金额格式应为最多两位小数");
@@ -51,28 +51,39 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
   if (sum > 100) throw new DomainError("VALIDATION", `分成比例之和 ${sum}% 不能超过 100%`);
 
   const now = deps.clock.now();
-  // Replace the plan atomically. batch() is one transaction on libSQL AND D1
-  // (no interactive db.transaction, which D1 lacks): the delete + insert commit
-  // together so the plan is never wiped without its replacement.
-  const del = deps.db.delete(commissionPlans).where(eq(commissionPlans.matterId, input.matterId));
+  const createdSec = Math.floor(now.getTime() / 1000);
+  // Replace the plan atomically AND authorization-atomically. A claim returns the
+  // matter row iff the caller is STILL owner/management; the guarded delete and
+  // insert carry the same owner predicate, so if ownership changed since the
+  // preflight every write no-ops. All in one batch() — one transaction on libSQL
+  // AND D1 — so a stale owner can neither wipe nor replace finance-sensitive plan
+  // data, and the plan is never wiped without its replacement.
+  const guard = matterOwnerAccessExists(auth, input.matterId);
+  const ownerCond = isManagement(auth)
+    ? undefined
+    : auth.role === "LAWYER"
+      ? eq(matters.ownerId, auth.userId)
+      : sql`1=0`;
+  const claim = deps.db.select({ id: matters.id }).from(matters).where(and(eq(matters.id, input.matterId), ownerCond));
+  const del = deps.db.delete(commissionPlans).where(and(eq(commissionPlans.matterId, input.matterId), guard));
+  let results;
   if (quantized.length > 0) {
-    await deps.db.batch([
-      del,
-      deps.db.insert(commissionPlans).values(
-        quantized.map((p) => ({
-          id: deps.ids.newId(),
-          matterId: input.matterId,
-          userId: p.userId,
-          percent: p.percent.toFixed(2),
-          label: p.label ?? null,
-          active: true,
-          createdAt: now,
-        })),
+    // Guarded multi-row insert: SELECT * FROM (VALUES …) WHERE <owner guard> — the
+    // VALUES columns are in CommissionPlan's schema order; the constant guard
+    // includes all rows or none. `active` is the integer 1 (boolean column).
+    const rows = sql.join(
+      quantized.map(
+        (p) =>
+          sql`(${deps.ids.newId()}, ${input.matterId}, ${p.userId}, ${p.percent.toFixed(2)}, ${p.label ?? null}, 1, ${createdSec})`,
       ),
-    ]);
+      sql`, `,
+    );
+    const ins = deps.db.insert(commissionPlans).select(sql`select * from (values ${rows}) where ${guard}`);
+    results = await deps.db.batch([claim, del, ins]);
   } else {
-    await del;
+    results = await deps.db.batch([claim, del]);
   }
+  if ((results[0] as unknown[]).length === 0) throw new DomainError("NOT_FOUND", "案件不存在");
   await deps.audit.record(auth, {
     action: "COMMISSION_PLAN_SET",
     targetType: "Matter",
