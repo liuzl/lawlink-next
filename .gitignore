@@ -16,4 +16,7 @@ dist/
 # build / deploy
 .wrangler/
 .vite/
-storage/
+# Local blob-storage dir used by the Node/fs StorageAdapter at runtime. Scoped to
+# the app dir so it does NOT match source dirs named `storage/` (e.g.
+# packages/core/src/storage/, which is the StorageAdapter source — must be tracked).
+/apps/api/storage/
