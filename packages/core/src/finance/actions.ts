@@ -155,6 +155,19 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   // new plan. The children chain off `exists(parent)` within the same batch, so a
   // failed CAS cascades them to no-ops too — children never outlive their parent,
   // and the telescoping share math stays exact in JS. epoch seconds.
+  // Write-time finance-access guard (mirrors assertFinanceAccess): management and
+  // FINANCE are firm-wide; a LAWYER may write only while still the matter owner.
+  // Re-checked on the parent insert so a caller who loses ownership between the
+  // preflight and the batch can't write the ledger (no archived check — finance
+  // edits are allowed on closed matters by design).
+  const financeAccess =
+    isManagement(auth) || auth.role === "FINANCE"
+      ? sql`1=1`
+      : auth.role === "LAWYER"
+        ? sql`m."owner_id" = ${auth.userId}`
+        : sql`0=1`;
+  const financeGuard = sql`exists (select 1 from "Matter" m where m."id" = ${input.matterId} and (${financeAccess}))`;
+
   const receivedCents = toCents(input.amount);
   const MAX_ATTEMPTS = 5;
   let commissionsGenerated = 0;
@@ -191,7 +204,7 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
       .insert(feeEntries)
       .select(sql`
         select ${id}, ${input.matterId}, null, 'RECEIVED', ${input.amount}, ${occurredSec}, null, ${input.payerOrPayee ?? null}, ${input.method ?? null}, ${input.note ?? null}, null, null, ${auth.userId}, ${createdSec}
-        where ${cas}
+        where ${cas} and ${financeGuard}
       `)
       .returning({ id: feeEntries.id });
     const childIns = children.map((c) =>
@@ -206,6 +219,10 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
       commissionsGenerated = children.length;
       break;
     }
+    // Parent no-op: either finance access was lost OR the plan changed since the
+    // read. Re-check access (throws NOT_FOUND if lost — no unauthorized ledger
+    // write); if access is intact it was the CAS, so retry with the new plan.
+    await assertFinanceAccess(deps.db, auth, input.matterId);
     if (attempt >= MAX_ATTEMPTS) {
       throw new DomainError("CONFLICT", "分成方案在记账时被并发修改，请重试");
     }

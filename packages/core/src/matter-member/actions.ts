@@ -12,7 +12,7 @@
  * partial-update races. Only the current owner or management may edit the team.
  */
 import { z } from "zod";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { matterMembers, matters, users } from "@lawlink/db";
 import {
   DomainError,
@@ -111,32 +111,47 @@ export async function setMatterTeam(deps: Deps, auth: AuthContext, rawInput: unk
   }
 
   const now = deps.clock.now();
-  // Authoritative re-read INSIDE the txn: re-run authorization and the archived
-  // guard against the CURRENT row (the pre-txn checks above are just for early,
-  // friendly errors), and sync ownerId UNCONDITIONALLY. This closes the TOCTOU
-  // where ownership changes between precheck and commit — a stale owner can no
-  // longer rebuild the roster, and Matter.ownerId can never diverge from the LEAD
-  // member we insert here. SQLite's write lock makes the read+writes atomic vs
-  // other committed writers, so a concurrent owner change can't be lost.
-  const prevOwnerId = await deps.db.transaction(async (tx) => {
-    const [cur] = await tx
-      .select({ ownerId: matters.ownerId, status: matters.status })
-      .from(matters)
-      .where(eq(matters.id, input.matterId))
-      .limit(1);
-    if (!cur) throw new DomainError("NOT_FOUND", "案件不存在");
-    if (!isManagement(auth) && cur.ownerId !== auth.userId) throw new DomainError("NOT_FOUND", "案件不存在");
-    if (cur.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，处于只读状态，不能调整团队");
+  const joinedSec = Math.floor(now.getTime() / 1000);
+  // Replace the whole roster + sync ownerId ATOMICALLY in one batch() (a single
+  // transaction on libSQL AND D1 — D1 has no interactive transactions). Every
+  // write is guarded by `guard` = the matter exists, is NOT archived, and the
+  // caller is STILL its owner (or management) — re-checked at WRITE time, not
+  // trusted from the prechecks above (which only give early friendly errors). So
+  // if ownership changes or the matter is archived between precheck and commit,
+  // all three writes no-op together (never a partial roster) and the claim
+  // (statement 0) returns 0 rows → we reject. The claim also yields prevOwnerId
+  // for the audit. Within one transaction the claim and the guarded writes see
+  // the same snapshot, so they pass or fail together. joined_at is epoch seconds.
+  const ownerCond = isManagement(auth) ? sql`1=1` : sql`m."owner_id" = ${auth.userId}`;
+  const guard = sql`exists (select 1 from "Matter" m where m."id" = ${input.matterId} and m."status" <> 'ARCHIVED' and (${ownerCond}))`;
 
-    await tx.delete(matterMembers).where(eq(matterMembers.matterId, input.matterId));
-    await tx.insert(matterMembers).values([
-      { id: deps.ids.newId(), matterId: input.matterId, userId: input.ownerId, role: "LEAD", joinedAt: now },
-      ...coLeadIds.map((uid) => ({ id: deps.ids.newId(), matterId: input.matterId, userId: uid, role: "CO_LEAD", joinedAt: now })),
-      ...assistantIds.map((uid) => ({ id: deps.ids.newId(), matterId: input.matterId, userId: uid, role: "ASSISTANT", joinedAt: now })),
-    ]);
-    await tx.update(matters).set({ ownerId: input.ownerId }).where(eq(matters.id, input.matterId));
-    return cur.ownerId;
-  });
+  const claim = deps.db
+    .select({ ownerId: matters.ownerId })
+    .from(matters)
+    .where(
+      and(
+        eq(matters.id, input.matterId),
+        sql`${matters.status} <> 'ARCHIVED'`,
+        isManagement(auth) ? sql`1=1` : eq(matters.ownerId, auth.userId),
+      ),
+    );
+  const del = deps.db.delete(matterMembers).where(and(eq(matterMembers.matterId, input.matterId), guard));
+  const memberValues = [
+    sql`(${deps.ids.newId()}, ${input.matterId}, ${input.ownerId}, 'LEAD', ${joinedSec})`,
+    ...coLeadIds.map((uid) => sql`(${deps.ids.newId()}, ${input.matterId}, ${uid}, 'CO_LEAD', ${joinedSec})`),
+    ...assistantIds.map((uid) => sql`(${deps.ids.newId()}, ${input.matterId}, ${uid}, 'ASSISTANT', ${joinedSec})`),
+  ];
+  const ins = deps.db
+    .insert(matterMembers)
+    .select(sql`select * from (values ${sql.join(memberValues, sql`, `)}) where ${guard}`);
+  const upd = deps.db.update(matters).set({ ownerId: input.ownerId }).where(and(eq(matters.id, input.matterId), guard));
+
+  const results = await deps.db.batch([claim, del, ins, upd]);
+  const claimRows = results[0] as { ownerId: string }[];
+  if (claimRows.length === 0) {
+    throw new DomainError("INVALID_STATE", "案件已归档或您已不是主办，无法调整团队");
+  }
+  const prevOwnerId = claimRows[0].ownerId;
 
   await deps.audit.record(auth, {
     action: "MATTER_TEAM_SET",
