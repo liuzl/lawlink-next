@@ -202,13 +202,18 @@ export async function deleteFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
     throw new DomainError("INVALID_STATE", "分成条目由实收自动生成，请删除对应实收记录");
   }
 
-  await deps.db.transaction(async (tx) => {
-    // Only a RECEIVED entry owns commission children to cascade.
-    if (entry.type === "RECEIVED") {
-      await tx.delete(feeEntries).where(eq(feeEntries.parentFeeEntryId, feeEntryId));
-    }
-    await tx.delete(feeEntries).where(eq(feeEntries.id, feeEntryId));
-  });
+  // Cascade + delete atomically in one batch() (one transaction on libSQL AND D1
+  // — D1 has no interactive transactions). Only a RECEIVED entry owns commission
+  // children to cascade; a non-RECEIVED entry deletes just itself.
+  const delSelf = deps.db.delete(feeEntries).where(eq(feeEntries.id, feeEntryId));
+  if (entry.type === "RECEIVED") {
+    await deps.db.batch([
+      deps.db.delete(feeEntries).where(eq(feeEntries.parentFeeEntryId, feeEntryId)),
+      delSelf,
+    ]);
+  } else {
+    await delSelf;
+  }
   await deps.audit.record(auth, {
     action: "FEE_ENTRY_DELETE",
     targetType: "FeeEntry",
