@@ -12,7 +12,7 @@ import { eq, max, sql } from "drizzle-orm";
 import { counters, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { PROCEDURES_BY_CATEGORY, isProcedureAllowed } from "./types.js";
 
 export const AddProcedureInput = z.object({
@@ -69,13 +69,12 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
     .returning({ value: counters.value });
   const order = counter.value;
 
-  // Write-time archived guard (replaces the interactive transaction's in-tx
-  // re-read): a correlated INSERT … SELECT … WHERE EXISTS(matter not archived).
-  // If archiveMatter committed between the preflight above and here, this inserts
-  // 0 rows and we reject — so a procedure can never land on a read-only matter.
-  // This is the D1-compatible equivalent of the repo's `matterNotArchived` guard
-  // (which it embeds in UPDATE/DELETE predicates) for an INSERT. created_at is
-  // epoch seconds, matching drizzle's integer timestamp encoding.
+  // Write-time guard (replaces the interactive transaction's in-tx re-read): a
+  // correlated INSERT … SELECT … WHERE matterWriteAccessExists(...). If the matter
+  // was archived OR the caller lost owner/member access (a concurrent
+  // setMatterTeam) between the preflight above and here, this inserts 0 rows and
+  // we reject — re-checking authorization AND archived status atomically at write
+  // time. created_at is epoch seconds, matching drizzle's integer timestamp.
   const id = deps.ids.newId();
   const createdSec = Math.floor(now.getTime() / 1000);
   const inserted = (await deps.db.all(sql`
@@ -83,10 +82,10 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
       ("id", "matter_id", "type", "engagement", "order", "case_number", "handling_agency", "handler", "status", "created_at")
     select ${id}, ${input.matterId}, ${input.type}, ${input.engagement}, ${order},
       ${input.caseNumber ?? null}, ${input.handlingAgency ?? null}, ${input.handler ?? null}, 'PENDING', ${createdSec}
-    where exists (select 1 from ${matters} where ${matters.id} = ${input.matterId} and ${matters.status} <> 'ARCHIVED')
+    where ${matterWriteAccessExists(auth, input.matterId)}
     returning "id"
   `)) as unknown[];
-  if (inserted.length === 0) throw new DomainError("INVALID_STATE", "案件已归档，只读，不能新增程序");
+  if (inserted.length === 0) throw new DomainError("INVALID_STATE", "案件已归档或无写入权限，不能新增程序");
 
   const result = { id, matterId: input.matterId, type: input.type, engagement: input.engagement, order };
 

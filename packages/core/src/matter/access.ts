@@ -11,7 +11,7 @@
  * checks never touch the DB. Only a non-owner case-worker triggers the roster
  * query. Access is async because membership is a stored relation.
  */
-import { and, eq, inArray, or, type SQL } from "drizzle-orm";
+import { and, eq, inArray, or, sql, type SQL } from "drizzle-orm";
 import { matterMembers, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement } from "../permissions.js";
@@ -38,6 +38,27 @@ export async function canAccessMatter(
     return isMatterMember(db, matter.id, auth.userId);
   }
   return false;
+}
+
+/**
+ * A correlated `EXISTS(...)` SQL predicate that is true iff the matter is WRITABLE
+ * by `auth` RIGHT NOW: it exists, is not ARCHIVED, and the caller may write
+ * (management → any; LAWYER → owner or team member; ASSISTANT → team member;
+ * FINANCE/other → none). Embed it in a guarded write (UPDATE/DELETE WHERE, or
+ * INSERT … SELECT … WHERE) so authorization + archived status are re-checked
+ * ATOMICALLY at write time — the D1-compatible replacement for an interactive
+ * transaction's in-tx re-read (D1 has no interactive transactions). Raw table/
+ * column names are used so the fragment composes inside arbitrary statements.
+ */
+export function matterWriteAccessExists(auth: AuthContext, matterId: string): SQL {
+  const access = isManagement(auth)
+    ? sql`1=1`
+    : auth.role === "LAWYER"
+      ? sql`(m."owner_id" = ${auth.userId} or exists (select 1 from "MatterMember" mm where mm."matter_id" = m."id" and mm."user_id" = ${auth.userId}))`
+      : auth.role === "ASSISTANT"
+        ? sql`exists (select 1 from "MatterMember" mm where mm."matter_id" = m."id" and mm."user_id" = ${auth.userId})`
+        : sql`0=1`;
+  return sql`exists (select 1 from "Matter" m where m."id" = ${matterId} and m."status" <> 'ARCHIVED' and (${access}))`;
 }
 
 /** Throw NOT_FOUND (not FORBIDDEN) so callers can't probe matter existence. */
