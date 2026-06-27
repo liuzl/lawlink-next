@@ -51,10 +51,14 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
   if (sum > 100) throw new DomainError("VALIDATION", `分成比例之和 ${sum}% 不能超过 100%`);
 
   const now = deps.clock.now();
-  await deps.db.transaction(async (tx) => {
-    await tx.delete(commissionPlans).where(eq(commissionPlans.matterId, input.matterId));
-    if (quantized.length > 0) {
-      await tx.insert(commissionPlans).values(
+  // Replace the plan atomically. batch() is one transaction on libSQL AND D1
+  // (no interactive db.transaction, which D1 lacks): the delete + insert commit
+  // together so the plan is never wiped without its replacement.
+  const del = deps.db.delete(commissionPlans).where(eq(commissionPlans.matterId, input.matterId));
+  if (quantized.length > 0) {
+    await deps.db.batch([
+      del,
+      deps.db.insert(commissionPlans).values(
         quantized.map((p) => ({
           id: deps.ids.newId(),
           matterId: input.matterId,
@@ -64,9 +68,11 @@ export async function setCommissionPlan(deps: Deps, auth: AuthContext, rawInput:
           active: true,
           createdAt: now,
         })),
-      );
-    }
-  });
+      ),
+    ]);
+  } else {
+    await del;
+  }
   await deps.audit.record(auth, {
     action: "COMMISSION_PLAN_SET",
     targetType: "Matter",

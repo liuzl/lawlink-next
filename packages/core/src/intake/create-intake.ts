@@ -92,10 +92,13 @@ export async function createIntake(
     });
   }
 
-  await deps.db.transaction(async (tx) => {
-    await tx.insert(intakes).values(intake);
-    await tx.insert(parties).values(partyRows);
-  });
+  // Atomic via batch (one transaction on libSQL AND D1) rather than an
+  // interactive db.transaction — D1 has no interactive transactions, and batch is
+  // all-or-nothing on both backends, which is all this fixed two-write set needs.
+  await deps.db.batch([
+    deps.db.insert(intakes).values(intake),
+    deps.db.insert(parties).values(partyRows),
+  ]);
 
   await deps.audit.record(auth, {
     action: "INTAKE_CREATE",

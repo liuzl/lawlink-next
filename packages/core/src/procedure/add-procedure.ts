@@ -29,57 +29,61 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
   const input = AddProcedureInput.parse(rawInput);
   const now = deps.clock.now();
 
-  const result = await deps.db.transaction(async (tx) => {
-    const [matter] = await tx
-      .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
-      .from(matters)
-      .where(eq(matters.id, input.matterId))
-      .limit(1);
-    if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
-    await assertMatterAccess(deps.db, matter, auth);
-    if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读，不能新增程序");
+  // Preconditions (read-only): matter exists, caller can access it, it's not
+  // archived, and the type is allowed for its category. These don't need to be in
+  // the same atomic unit as the write — they gate it.
+  const [matter] = await deps.db
+    .select({ id: matters.id, category: matters.category, ownerId: matters.ownerId, status: matters.status })
+    .from(matters)
+    .where(eq(matters.id, input.matterId))
+    .limit(1);
+  if (!matter) throw new DomainError("NOT_FOUND", "案件不存在");
+  await assertMatterAccess(deps.db, matter, auth);
+  if (matter.status === "ARCHIVED") throw new DomainError("INVALID_STATE", "案件已归档，只读，不能新增程序");
 
-    const category = matter.category as MatterCategory;
-    if (!isProcedureAllowed(category, input.type as never)) {
-      throw new DomainError(
-        "VALIDATION",
-        `程序类型 ${input.type} 不适用于 ${category}（可选：${PROCEDURES_BY_CATEGORY[category].join("、")}）`,
-      );
-    }
+  const category = matter.category as MatterCategory;
+  if (!isProcedureAllowed(category, input.type as never)) {
+    throw new DomainError(
+      "VALIDATION",
+      `程序类型 ${input.type} 不适用于 ${category}（可选：${PROCEDURES_BY_CATEGORY[category].join("、")}）`,
+    );
+  }
 
-    // Atomic per-matter order. The counter SELF-INITIALIZES from the current
-    // MAX(order) on first use, so matters that already have procedures (created
-    // before this counter existed) don't collide with unique(matterId, order).
-    // Subsequent (concurrent) callers hit the conflict path and atomically +1.
-    const [{ maxOrder }] = await tx
-      .select({ maxOrder: max(matterProcedures.order) })
-      .from(matterProcedures)
-      .where(eq(matterProcedures.matterId, input.matterId));
-    const seed = (maxOrder ?? 0) + 1;
+  // Atomic per-matter order from a counter. The counter SELF-INITIALIZES from the
+  // current MAX(order), so matters created before this counter existed don't
+  // collide with unique(matterId, order); concurrent callers hit the conflict
+  // path and atomically +1. The upsert is a single atomic statement that RETURNS
+  // the order — no interactive transaction needed (works on libSQL AND D1). A
+  // failed insert below would only leave an unused counter value (a harmless gap,
+  // same as case-number allocation).
+  const [{ maxOrder }] = await deps.db
+    .select({ maxOrder: max(matterProcedures.order) })
+    .from(matterProcedures)
+    .where(eq(matterProcedures.matterId, input.matterId));
+  const seed = (maxOrder ?? 0) + 1;
 
-    const [counter] = await tx
-      .insert(counters)
-      .values({ key: `proc-order-${input.matterId}`, value: seed })
-      .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
-      .returning({ value: counters.value });
-    const order = counter.value;
+  const [counter] = await deps.db
+    .insert(counters)
+    .values({ key: `proc-order-${input.matterId}`, value: seed })
+    .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
+    .returning({ value: counters.value });
+  const order = counter.value;
 
-    const id = deps.ids.newId();
-    await tx.insert(matterProcedures).values({
-      id,
-      matterId: input.matterId,
-      type: input.type,
-      engagement: input.engagement,
-      order,
-      caseNumber: input.caseNumber ?? null,
-      handlingAgency: input.handlingAgency ?? null,
-      handler: input.handler ?? null,
-      status: "PENDING",
-      createdAt: now,
-    });
-
-    return { id, matterId: input.matterId, type: input.type, engagement: input.engagement, order };
+  const id = deps.ids.newId();
+  await deps.db.insert(matterProcedures).values({
+    id,
+    matterId: input.matterId,
+    type: input.type,
+    engagement: input.engagement,
+    order,
+    caseNumber: input.caseNumber ?? null,
+    handlingAgency: input.handlingAgency ?? null,
+    handler: input.handler ?? null,
+    status: "PENDING",
+    createdAt: now,
   });
+
+  const result = { id, matterId: input.matterId, type: input.type, engagement: input.engagement, order };
 
   await deps.audit.record(auth, {
     action: "PROCEDURE_CREATE",
