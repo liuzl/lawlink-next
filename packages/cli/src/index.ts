@@ -256,9 +256,27 @@ interface Spec {
   local: (auth: AuthContext, input: any) => Promise<unknown> | unknown;
 }
 
-/** Dispatch a command in remote (HTTP) or local (in-process) mode. */
+/** True for a mutating command (anything but GET) — gated by --dry-run. */
+function isMutation(spec: Spec): boolean {
+  return spec.method !== "GET";
+}
+
+/** Dispatch a command in remote (HTTP) or local (in-process) mode. With
+ * `--dry-run`, a mutating command is NOT executed — it returns the exact call it
+ * WOULD make (mode + method + target + input) so a human/agent can confirm a
+ * destructive op before committing (§4.3). Reads ignore --dry-run. */
 function dispatch(opts: { token?: string }, spec: Spec): void {
   const base = remoteBase();
+  if (program.opts().dryRun && isMutation(spec)) {
+    run(async () => ({
+      dryRun: true,
+      mode: base ? "remote" : "local",
+      method: spec.method,
+      ...(base ? { url: base + spec.path } : {}),
+      input: spec.input ?? {},
+    }));
+    return;
+  }
   run(async () => {
     const input = spec.input ?? {};
     if (base) return apiCall(spec.method, spec.path, spec.method === "GET" ? undefined : input, tokenOf(opts), base);
@@ -273,6 +291,7 @@ program
   .option("--remote", "call the deployed API instead of the local DB (or set LAWLINK_REMOTE=1)")
   .option("--api-url <url>", `API base for --remote (default ${DEFAULT_REMOTE}; or LAWLINK_API_URL)`)
   .option("--raw", "print bare data on stdout (errors to stderr) instead of the {ok,data} envelope")
+  .option("--dry-run", "for mutating commands: print the call that WOULD run, without executing it")
   .version("0.0.0")
   // Route commander's own usage errors (unknown command / missing option) through
   // the SAME JSON envelope instead of plain text on stderr, so an agent never
@@ -971,8 +990,11 @@ document
   .option("--token <token>")
   .action((opts) =>
     run(async () => {
-      const buf = await readFile(opts.file);
       const name = opts.name ?? basename(opts.file);
+      if (program.opts().dryRun) {
+        return { dryRun: true, mode: remoteBase() ? "remote" : "local", method: "POST", path: `/api/matters/${opts.matterId}/documents/upload`, input: { matterId: opts.matterId, file: opts.file, name, category: opts.category, folderId: opts.folderId } };
+      }
+      const buf = await readFile(opts.file);
       const base = remoteBase();
       if (base) {
         const form = new FormData();
@@ -1209,8 +1231,11 @@ template
   .option("--token <token>")
   .action((opts) =>
     run(async () => {
-      const buf = await readFile(opts.file);
       const applicable = (opts.applicable as string[]).length ? (opts.applicable as string[]) : undefined;
+      if (program.opts().dryRun) {
+        return { dryRun: true, mode: remoteBase() ? "remote" : "local", method: "POST", path: "/api/templates/upload", input: { file: opts.file, name: opts.name, category: opts.category, description: opts.description, applicableCategories: applicable } };
+      }
+      const buf = await readFile(opts.file);
       const base = remoteBase();
       if (base) {
         const form = new FormData();
@@ -1694,6 +1719,7 @@ program
       },
       errorCodes: Object.keys(HTTP),
       exitCodes: { success: 0, ...EXIT },
+      dryRun: "add --dry-run to a mutating command to print the exact call it WOULD make (mode/method/target/input) without executing — preview destructive ops first.",
       auth: "get a token via `auth login`; pass it with --token or env LAWLINK_TOKEN. Without it, local mode uses an env-stub identity (LAWLINK_USER_ID/LAWLINK_ROLE).",
       remote: `add --remote (or LAWLINK_REMOTE=1) to call the deployed API instead of local libSQL; --api-url or LAWLINK_API_URL overrides the base (default ${DEFAULT_REMOTE}).`,
       commands: (describe(program) as { commands: unknown[] }).commands,

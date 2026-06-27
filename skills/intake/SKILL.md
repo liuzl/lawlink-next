@@ -1,48 +1,49 @@
 ---
 name: lawlink-intake
-version: 0.0.1
-description: "收案登记 / intake registration —— create and manage intakes via the lawlink CLI."
+version: 0.1.0
+description: "收案登记 / intake registration —— 登记咨询、查冲突后转正式案件、不接案。"
 metadata:
   requires:
     bins: ["lawlink"]
+    skills: ["conflict"]
   cliHelp: "lawlink intake --help"
 ---
 
 # Skill: 收案登记 (Intake)
 
-> 模板 Skill，演示 §4.5 的设计：frontmatter + 决策表 + 概念消歧 + 按需加载。
-> 内容种子来自 [`docs/DOMAIN-SPEC.md`](../../docs/DOMAIN-SPEC.md) §5.1。随 P1+ 用例补全而扩充。
+> 先读 [skills/README.md](../README.md) 的全局契约 + 概念消歧。种子：DOMAIN-SPEC §5.1。
 
-## 概念消歧（先读）
-- **Intake（收案）**：正式案件的前身，是一次咨询登记。**不是** Matter（正式案件）。
-- 收案经"利益冲突检索 → 审批"后才 `转为正式案件`（生成 Matter）。详见 DOMAIN-SPEC §5.1。
+## 概念消歧
+- **Intake（收案）= 咨询登记，不是 Matter（正式案件）**。`convert` 后才生成 Matter。
+- 同一客户多次咨询分别建 Intake，不合并客户。
 
 ## 意图路由
-| 用户意图 | 操作 |
-|---|---|
-| "登记一个新咨询 / 新收案" | `lawlink intake create` |
-| "把收案转成正式案件" | （P1+ 提供 `lawlink intake convert`） |
-| "标记不接案" | （P1+ 提供 `lawlink intake decline`） |
-
-## `lawlink intake create`
-登记一条收案。任何已认证角色均可提交（DOMAIN-SPEC §5.1）。
-
-**参数**
-| 参数 | 必填 | 说明 |
+| 用户意图 | 操作 | 说明 |
 |---|---|---|
-| `--client-name <name>` | 是 | 委托方名称 |
-| `--category <category>` | 是 | `CIVIL_COMMERCIAL` \| `CRIMINAL` \| `ADMINISTRATIVE` \| `NON_LITIGATION` \| `LEGAL_COUNSEL` \| `SPECIAL_PROJECT` |
-| `--title <title>` | 否 | 留空按 `{委托方} 与 {对方} {案由}纠纷` 自动生成 |
-| `--claim-amount <amount>` | 否 | 标的额，最多两位小数 |
-| `--format <json\|text>` | 否 | 默认 `json` |
+| 登记一个新咨询/收案 | `intake create` | 任何已认证角色可提交 |
+| 查这条收案能不能接（冲突） | 先 `conflict check`（见 [conflict](../conflict/SKILL.md)） | **convert 的前置门** |
+| 转成正式案件 | `intake convert` | 仅 ADMIN/PRINCIPAL_LAWYER；生成 Matter + 编号 + 卷宗 + 主办 |
+| 不接案 | `intake decline` | 仅 ADMIN/PRINCIPAL_LAWYER；需 `--reason` |
 
-**示例（agent 友好，JSON 输出）**
+## 前置门
+- **convert 前必须 `conflict check`**：命中 🔴 `BLOCKING` 为绝对冲突，**不得 convert**。
+- convert 不可逆（生成 Matter、收案转 CONVERTED）；不确定先 `--dry-run`。
+
+## create
 ```bash
-lawlink intake create \
-  --client-name "青石建设" \
-  --category CIVIL_COMMERCIAL \
-  --claim-amount 1250000.00 \
-  --format json
+lawlink intake create --client-name "青石建设" --category CIVIL_COMMERCIAL --claim-amount 1250000.00 --token "$T"
 ```
+`--category`: `CIVIL_COMMERCIAL|CRIMINAL|ADMINISTRATIVE|NON_LITIGATION|LEGAL_COUNSEL|SPECIAL_PROJECT`。
+`--title` 留空自动生成；可选 `--client-id-number/--opposing-name/--opposing-id-number`。
+→ `data` 为 intake 对象（`id`/`status=INTAKE`）。
 
-**输出**：创建的 intake 对象（含 `id` / `status=INTAKE` / `createdAt`）。失败时输出 `{ "error": "..." }` 且退出码非 0。
+## convert
+```bash
+lawlink intake convert --intake-id <id> --token "$T"      # 加 --dry-run 预演
+```
+→ `data.matterId` + `internalCode`（如 `LL-2026-CC-0001`）。已是终态的收案重复 convert → `INVALID_STATE`(exit 5)。
+
+## decline
+```bash
+lawlink intake decline --intake-id <id> --reason "存在利益冲突" --token "$T"
+```
