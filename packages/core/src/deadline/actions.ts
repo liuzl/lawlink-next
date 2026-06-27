@@ -1,10 +1,10 @@
 /** Deadline use cases (DOMAIN-SPEC §6.4, §9.1). */
 import { z } from "zod";
-import { and, asc, eq, getTableColumns, notInArray } from "drizzle-orm";
+import { and, asc, eq, getTableColumns, notInArray, sql } from "drizzle-orm";
 import { deadlines, matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
-import { assertMatterAccess } from "../matter/access.js";
+import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { computeDeadlines, type DeadlineEvent } from "./rules.js";
 
 type Tx = Parameters<Parameters<Deps["db"]["transaction"]>[0]>[0];
@@ -59,64 +59,66 @@ export async function applyDeadlineRules(deps: Deps, auth: AuthContext, rawInput
   const input = ApplyDeadlineRulesInput.parse(rawInput);
   const now = deps.clock.now();
 
-  const result = await deps.db.transaction(async (tx) => {
-    const { matterId, category } = await authorizedMatterOfProcedure(tx, auth, input.procedureId);
-    const computed = computeDeadlines(category, input.event as DeadlineEvent, input.eventDate);
+  // Preflight (gate): procedure exists + ENGAGED, matter accessible + not
+  // archived. Reads don't need to share the atomic unit with the writes.
+  const { matterId, category } = await authorizedMatterOfProcedure(deps.db, auth, input.procedureId);
+  const computed = computeDeadlines(category, input.event as DeadlineEvent, input.eventDate);
 
-    // Idempotent UPSERT by natural key (procedure, event, category): update the
-    // due date/basis of an existing auto row IN PLACE — preserving its id and
-    // completed/completedAt — instead of deleting + recreating (which would wipe
-    // a lawyer's "已完成" mark and break reminder/audit references).
-    for (const d of computed) {
-      const [existing] = await tx
-        .select({ id: deadlines.id })
-        .from(deadlines)
-        .where(
-          and(
-            eq(deadlines.procedureId, input.procedureId),
-            eq(deadlines.autoComputed, true),
-            eq(deadlines.sourceEvent, input.event),
-            eq(deadlines.category, d.category),
-          ),
-        )
-        .limit(1);
+  // Idempotent UPSERT by natural key (procedure, event, category) + prune, all in
+  // ONE batch() — a single transaction on libSQL AND D1 (D1 has no interactive
+  // transactions). There is no unique index on the natural key, so each upsert is
+  // an UPDATE-in-place (preserves id + completed/completedAt — never wipes a
+  // lawyer's "已完成" mark) followed by an INSERT-if-absent. Every write carries
+  // matterWriteAccessExists so an archive/access-loss landing after the preflight
+  // (TOCTOU) no-ops the whole set; the claim (statement 0) returns the matter row
+  // iff still writable so we reject accurately instead of reporting a silent
+  // no-op as success. epoch seconds throughout.
+  const createdSec = Math.floor(now.getTime() / 1000);
+  const matterGuard = matterWriteAccessExists(auth, matterId);
 
-      if (existing) {
-        await tx
-          .update(deadlines)
-          .set({ title: d.title, dueAt: d.dueAt, basis: d.basis })
-          .where(eq(deadlines.id, existing.id));
-      } else {
-        await tx.insert(deadlines).values({
-          id: deps.ids.newId(),
-          procedureId: input.procedureId,
-          matterId,
-          category: d.category,
-          title: d.title,
-          dueAt: d.dueAt,
-          basis: d.basis,
-          sourceEvent: input.event,
-          autoComputed: true,
-          completed: false,
-          createdAt: now,
-        });
-      }
-    }
-
-    // Prune obsolete auto deadlines: categories no longer produced by the rules
-    // (e.g. a corrected JUDGMENT_EFFECTIVE that no longer emits ENFORCEMENT).
-    const keep = computed.map((d) => d.category);
-    await tx.delete(deadlines).where(
+  const claim = deps.db.select({ id: matters.id }).from(matters).where(and(eq(matters.id, matterId), matterGuard));
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stmts: any[] = [claim];
+  for (const d of computed) {
+    const keyMatch = and(
+      eq(deadlines.procedureId, input.procedureId),
+      eq(deadlines.autoComputed, true),
+      eq(deadlines.sourceEvent, input.event),
+      eq(deadlines.category, d.category),
+    );
+    stmts.push(
+      deps.db.update(deadlines).set({ title: d.title, dueAt: d.dueAt, basis: d.basis }).where(and(keyMatch, matterGuard)),
+    );
+    const dueAtSec = Math.floor(d.dueAt.getTime() / 1000);
+    stmts.push(
+      deps.db.insert(deadlines).select(sql`
+        select ${deps.ids.newId()}, ${input.procedureId}, ${matterId}, ${d.category}, ${d.title}, ${dueAtSec}, ${d.basis ?? null}, ${input.event}, 1, 0, null, ${createdSec}
+        where not exists (select 1 from "Deadline" where "procedure_id" = ${input.procedureId} and "auto_computed" = 1 and "source_event" = ${input.event} and "category" = ${d.category})
+          and ${matterGuard}
+      `),
+    );
+  }
+  // Prune obsolete auto deadlines: categories no longer produced by the rules
+  // (e.g. a corrected JUDGMENT_EFFECTIVE that no longer emits ENFORCEMENT).
+  const keep = computed.map((d) => d.category);
+  stmts.push(
+    deps.db.delete(deadlines).where(
       and(
         eq(deadlines.procedureId, input.procedureId),
         eq(deadlines.autoComputed, true),
         eq(deadlines.sourceEvent, input.event),
         keep.length > 0 ? notInArray(deadlines.category, keep) : undefined,
+        matterGuard,
       ),
-    );
+    ),
+  );
 
-    return { procedureId: input.procedureId, matterId, event: input.event, created: computed.length, deadlines: computed };
-  });
+  const results = await deps.db.batch(stmts as [(typeof stmts)[number], ...(typeof stmts)[number][]]);
+  if ((results[0] as unknown[]).length === 0) {
+    throw new DomainError("INVALID_STATE", "案件已归档或无写入权限，不能推算期限");
+  }
+
+  const result = { procedureId: input.procedureId, matterId, event: input.event, created: computed.length, deadlines: computed };
 
   await deps.audit.record(auth, {
     action: "DEADLINE_RULES_APPLY",
