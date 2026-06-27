@@ -7,6 +7,9 @@
 import { build } from "esbuild";
 import { chmodSync } from "node:fs";
 
+// Regenerate the embedded skills module from /skills before bundling.
+await import("./gen-skills.mjs");
+
 await build({
   entryPoints: ["src/index.ts"],
   bundle: true,

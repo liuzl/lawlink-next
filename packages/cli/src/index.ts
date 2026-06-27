@@ -112,6 +112,7 @@ import {
 import { readFile, writeFile } from "node:fs/promises";
 import { basename } from "node:path";
 import { createDb, runMigrations, users } from "@lawlink/db";
+import { SKILLS, SKILLS_README } from "./skills.generated.js";
 
 /** Default deployed API base for --remote (override with a value or LAWLINK_API_URL). */
 const DEFAULT_REMOTE = "https://lawlink-next.zhanliangliu.workers.dev";
@@ -1693,6 +1694,33 @@ sms
     }),
   );
 
+// ── skills (agent workflow docs, embedded — progressive disclosure §4.5) ────
+const skills = program.command("skills").description("agent 技能文档：能力 / 工作流 / 前置门（先 list 再 show <域>）");
+skills
+  .command("list")
+  .description("列出所有域 skill（含路由入口 index）")
+  .action(() =>
+    run(async () => ({
+      router: "lawlink skills show index",
+      hint: "按域读取：lawlink skills show <domain>（--raw 输出纯 markdown）",
+      skills: SKILLS.map((s) => ({ domain: s.domain, name: s.name, description: s.description, cliHelp: s.cliHelp })),
+    })),
+  );
+skills
+  .command("show")
+  .description("输出某个 skill 的 markdown（域名，或 index/readme 看总路由）")
+  .argument("<domain>", "域名（intake/conflict/matter/…）或 index")
+  .action((domain: string) =>
+    run(async () => {
+      if (domain === "index" || domain === "readme" || domain === "router") {
+        return rawMode() ? SKILLS_README : { domain: "index", body: SKILLS_README };
+      }
+      const s = SKILLS.find((x) => x.domain === domain || x.name === domain);
+      if (!s) throw new DomainError("NOT_FOUND", `无此 skill「${domain}」——用 \`lawlink skills list\` 查看可用域`);
+      return rawMode() ? s.body : s;
+    }),
+  );
+
 // ── meta (agent capability discovery) ──────────────────────────────────────
 /** Recursively describe a command tree (commander introspection) as JSON. */
 function describe(cmd: Command): unknown {
@@ -1722,6 +1750,7 @@ program
       dryRun: "add --dry-run to a mutating command to print the exact call it WOULD make (mode/method/target/input) without executing — preview destructive ops first.",
       auth: "get a token via `auth login`; pass it with --token or env LAWLINK_TOKEN. Without it, local mode uses an env-stub identity (LAWLINK_USER_ID/LAWLINK_ROLE).",
       remote: `add --remote (or LAWLINK_REMOTE=1) to call the deployed API instead of local libSQL; --api-url or LAWLINK_API_URL overrides the base (default ${DEFAULT_REMOTE}).`,
+      skills: "workflow/gate docs are embedded: `lawlink skills list` then `lawlink skills show <domain>` (start with `skills show index`). Read the relevant domain skill before acting.",
       commands: (describe(program) as { commands: unknown[] }).commands,
     })),
   );

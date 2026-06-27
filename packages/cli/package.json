@@ -10,6 +10,7 @@
   "scripts": {
     "typecheck": "tsc --noEmit",
     "dev": "tsx src/index.ts",
+    "gen:skills": "node gen-skills.mjs",
     "build": "node build.mjs",
     "prepare": "node build.mjs"
   },
