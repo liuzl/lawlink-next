@@ -12,10 +12,6 @@ import { requireRole } from "../permissions.js";
 import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
 
-/** Transaction handle (structurally a db sans `batch`) — lets folder seeding run
- * inside an outer transaction (e.g. intake conversion) or standalone. */
-type Tx = Parameters<Parameters<Deps["db"]["transaction"]>[0]>[0];
-
 /** Correlated guard: this folder's matter is NOT archived. Added to folder
  * UPDATE/DELETE predicates so an archive landing after the preflight (TOCTOU)
  * still can't mutate a closed case's folders — the guarded write matches 0
@@ -41,9 +37,7 @@ export async function seedDefaultFolders(
   deps: Deps,
   matterId: string,
   category: MatterCategory,
-  tx?: Tx,
 ): Promise<number> {
-  const db = tx ?? deps.db;
   const names = DEFAULT_FOLDERS[category] ?? DEFAULT_FOLDERS.CIVIL_COMMERCIAL;
   const now = deps.clock.now();
   const rows = names.map((name, i) => ({
@@ -56,7 +50,7 @@ export async function seedDefaultFolders(
     updatedAt: now,
   }));
   // onConflictDoNothing on the unique(matterId,name) index → idempotent seeding.
-  await db.insert(documentFolders).values(rows).onConflictDoNothing();
+  await deps.db.insert(documentFolders).values(rows).onConflictDoNothing();
   return rows.length;
 }
 

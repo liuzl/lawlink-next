@@ -117,24 +117,33 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   const occurredSec = Math.floor(occurredAt.getTime() / 1000);
   const createdSec = Math.floor(now.getTime() / 1000);
 
-  // A non-RECEIVED entry spawns no commissions — a plain insert, no plan involved.
+  // Write-time finance-access guard (mirrors assertFinanceAccess): management and
+  // FINANCE are firm-wide; a LAWYER may write only while still the matter owner.
+  // Embedded in EVERY ledger insert so a caller who loses ownership between the
+  // preflight and the write can't book a row (no archived check — finance edits
+  // are allowed on closed matters by design). On a 0-row insert we re-run
+  // assertFinanceAccess to surface the precise access-loss / missing-matter error.
+  const financeAccess =
+    isManagement(auth) || auth.role === "FINANCE"
+      ? sql`1=1`
+      : auth.role === "LAWYER"
+        ? sql`m."owner_id" = ${auth.userId}`
+        : sql`0=1`;
+  const financeGuard = sql`exists (select 1 from "Matter" m where m."id" = ${input.matterId} and (${financeAccess}))`;
+
+  // A non-RECEIVED entry spawns no commissions — a single guarded insert.
   if (input.type !== "RECEIVED") {
-    await deps.db.insert(feeEntries).values({
-      id,
-      matterId: input.matterId,
-      billingId: null,
-      type: input.type,
-      amount: input.amount,
-      occurredAt,
-      invoiceNo: null,
-      payerOrPayee: input.payerOrPayee ?? null,
-      method: input.method ?? null,
-      note: input.note ?? null,
-      parentFeeEntryId: null,
-      beneficiaryUserId: null,
-      recordedById: auth.userId,
-      createdAt: now,
-    });
+    const inserted = (await deps.db.all(sql`
+      insert into ${feeEntries}
+        ("id", "matter_id", "billing_id", "type", "amount", "occurred_at", "invoice_no", "payer_or_payee", "method", "note", "parent_fee_entry_id", "beneficiary_user_id", "recorded_by_id", "created_at")
+      select ${id}, ${input.matterId}, null, ${input.type}, ${input.amount}, ${occurredSec}, null, ${input.payerOrPayee ?? null}, ${input.method ?? null}, ${input.note ?? null}, null, null, ${auth.userId}, ${createdSec}
+      where ${financeGuard}
+      returning "id"
+    `)) as unknown[];
+    if (inserted.length === 0) {
+      await assertFinanceAccess(deps.db, auth, input.matterId); // throws if access lost / matter gone
+      throw new DomainError("INVALID_STATE", "记账失败，请重试");
+    }
     await deps.audit.record(auth, {
       action: "FEE_ENTRY_CREATE",
       targetType: "FeeEntry",
@@ -151,23 +160,11 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   // that changed between the read and the write (silent ledger corruption), the
   // PARENT insert is guarded by a compare-and-swap on the active plan-id SET
   // (setCommissionPlan rewrites rows with fresh ids, so the id set is a faithful
-  // fingerprint); if it changed, the parent inserts 0 rows and we RETRY with the
-  // new plan. The children chain off `exists(parent)` within the same batch, so a
-  // failed CAS cascades them to no-ops too — children never outlive their parent,
-  // and the telescoping share math stays exact in JS. epoch seconds.
-  // Write-time finance-access guard (mirrors assertFinanceAccess): management and
-  // FINANCE are firm-wide; a LAWYER may write only while still the matter owner.
-  // Re-checked on the parent insert so a caller who loses ownership between the
-  // preflight and the batch can't write the ledger (no archived check — finance
-  // edits are allowed on closed matters by design).
-  const financeAccess =
-    isManagement(auth) || auth.role === "FINANCE"
-      ? sql`1=1`
-      : auth.role === "LAWYER"
-        ? sql`m."owner_id" = ${auth.userId}`
-        : sql`0=1`;
-  const financeGuard = sql`exists (select 1 from "Matter" m where m."id" = ${input.matterId} and (${financeAccess}))`;
-
+  // fingerprint) PLUS financeGuard; if either fails the parent inserts 0 rows. On
+  // 0 rows we re-check access (reject) else retry with the new plan. The children
+  // chain off `exists(parent)` within the same batch, so a failed guard cascades
+  // them to no-ops too — children never outlive their parent, and the telescoping
+  // share math stays exact in JS. epoch seconds.
   const receivedCents = toCents(input.amount);
   const MAX_ATTEMPTS = 5;
   let commissionsGenerated = 0;
