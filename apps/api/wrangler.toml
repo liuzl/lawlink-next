@@ -25,7 +25,7 @@ run_worker_first = ["/api/*"]
 [[d1_databases]]
 binding = "DB"
 database_name = "lawlink-db"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "a74454c3-7d91-42b9-b8f7-982d3b7f1a17"
 migrations_dir = "../../packages/db/migrations"
 
 # R2: bound as `STORAGE` (env.STORAGE → createR2Storage) for document/template blobs.
@@ -36,7 +36,6 @@ bucket_name = "lawlink-storage"
 [observability]
 enabled = true
 
-# Dev-only JWT secret. Production: `wrangler secret put LAWLINK_JWT_SECRET`
-# (a real secret overrides this var).
-[vars]
-LAWLINK_JWT_SECRET = "dev-only-secret-change-me-0123456789abcdef"
+# LAWLINK_JWT_SECRET is a Worker SECRET (set via `wrangler secret put`), not a
+# [vars] entry — a var and secret of the same name collide. Local `wrangler dev`
+# reads it from apps/api/.env instead.
