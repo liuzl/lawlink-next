@@ -9,29 +9,18 @@
  * audit guarantees apply; this module only adds parsing, matching and tracking.
  */
 import { z } from "zod";
-import { and, desc, eq, inArray, isNull, or } from "drizzle-orm";
-import { matterProcedures, matters, smsMessages } from "@lawlink/db";
+import { and, desc, eq, inArray, isNull, or, sql } from "drizzle-orm";
+import { deadlines, hearings, matterProcedures, matters, smsMessages } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps } from "../types.js";
 import { isManagement, requireRole } from "../permissions.js";
-import { assertMatterAccess, canAccessMatter, matterVisibilityCondition } from "../matter/access.js";
+import { assertMatterAccess, canAccessMatter, matterVisibilityCondition, matterWriteAccessExists } from "../matter/access.js";
 import { assertMatterWritable } from "../matter/guards.js";
-import { addHearing } from "../activity/actions.js";
-import { addDeadline } from "../deadline/actions.js";
-import { createAuditSink } from "../audit/sink.js";
 import { parseSms, toDate, type ParsedSms } from "./parser.js";
 
 /** Bind deps to a transaction handle: the db AND a tx-scoped audit sink, so a
  * nested use case's writes (incl. its audit row) all land in the same txn and
  * roll back together. addHearing/addDeadline open no nested txn and never call
  * batch(), so the cast is safe at runtime. */
-function txDepsFor(deps: Deps, tx: unknown): Deps {
-  const db = tx as Deps["db"];
-  // Preserve request audit context (ip/userAgent) on the tx-bound sink, falling
-  // back to a fresh sink only for sinks without withDb (e.g. the noop sink).
-  const audit = deps.audit.withDb ? deps.audit.withDb(db) : createAuditSink(db, deps.ids, deps.clock);
-  return { ...deps, db, audit };
-}
-
 /** Add N calendar days to a date (local), preserving time. */
 function addDays(base: Date, n: number): Date {
   const d = new Date(base);
@@ -240,7 +229,7 @@ async function assertGeneratableProcedure(deps: Deps, auth: AuthContext, procedu
 export const GenerateHearingInput = z.object({
   smsId: z.string().min(1),
   procedureId: z.string().min(1).optional(),
-  title: z.string().max(200).optional(),
+  title: z.string().trim().min(1).max(200).optional(),
   startsAt: z.coerce.date().optional(),
 });
 
@@ -259,56 +248,71 @@ export async function generateHearingFromSms(deps: Deps, auth: AuthContext, rawI
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
   await assertGeneratableProcedure(deps, auth, procedureId); // all addHearing preconditions, pre-claim
 
-  // Claim + create + back-reference in ONE transaction, so there is no window in
-  // which a hearing exists while the SMS link is still NULL. The claim requires
-  // processed=false AND no hearing yet (re-click / concurrent / undo→regenerate
-  // all match 0 rows and bail → never a duplicate); if addHearing throws inside
-  // the txn (e.g. matter archived in the race window) the whole thing rolls back,
-  // leaving the SMS unprocessed and retryable. addHearing runs against the txn's
-  // db handle; it opens no nested transaction and never calls batch().
+  // Claim + create + back-reference in ONE batch() — a single transaction on
+  // libSQL AND D1 (D1 has no interactive transactions) — so there is no window in
+  // which a hearing exists while the SMS link is still NULL. addHearing is inlined
+  // (its insert + its engagement/writable checks) as a guarded write rather than
+  // called as a sub-action, since a sub-action can't run inside a batch.
+  //  - `writeGuard` re-checks at WRITE time that the procedure is still ENGAGED on
+  //    the resolved matter AND the caller still has write access (matter not
+  //    archived / access not lost) — addHearing's engagedProcedureMatter, atomic.
+  //  - `smsClaimable` pins processed=false, no hearing yet, AND matchedMatterId to
+  //    the value we resolved against (a concurrent assignSmsMatter can't land a
+  //    hearing on the old matter); re-click/concurrent/undo→regenerate all fail.
+  // The hearing insert runs FIRST (guarded by both), then the claim (same guards)
+  // returns 0 rows and bails if anything changed, then the back-ref fires only if
+  // the hearing was actually inserted (exists(hearing)). So a failed guard cascades
+  // all three to no-ops — never a hearing without its SMS link, or vice versa.
   const now = deps.clock.now();
-  const hearing = await deps.db.transaction(async (tx) => {
-    const txDeps = txDepsFor(deps, tx);
-    // Claim also pins matchedMatterId to the value we resolved the procedure
-    // against, so a concurrent assignSmsMatter (which changes matchedMatterId)
-    // can't let us land a hearing on the old matter while the SMS now points
-    // elsewhere — the claim simply matches 0 rows and the caller retries.
-    const claimed = await tx
-      .update(smsMessages)
-      .set({ processed: true, processedAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(smsMessages.id, r.id),
-          eq(smsMessages.processed, false),
-          isNull(smsMessages.generatedHearingId),
-          eq(smsMessages.matchedMatterId, matchedMatterId),
-        ),
-      )
-      .returning({ id: smsMessages.id });
-    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理、已生成开庭或关联案件已变更，无法生成");
-    const h = await addHearing(txDeps, auth, {
-      procedureId,
-      title: input.title ?? `开庭（${parsed.court ?? "法院"}）`,
-      startsAt,
-      room: parsed.courtRoom ?? undefined,
-      judge: parsed.judge ?? undefined,
-    });
-    await tx.update(smsMessages).set({ generatedHearingId: h.id, updatedAt: now }).where(eq(smsMessages.id, r.id));
-    return h;
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const startsSec = Math.floor(startsAt.getTime() / 1000);
+  const hearingId = deps.ids.newId();
+  const hearingTitle = input.title ?? `开庭（${parsed.court ?? "法院"}）`;
+  const writeGuard = sql`exists (select 1 from "MatterProcedure" p where p."id" = ${procedureId} and p."engagement" = 'ENGAGED' and p."matter_id" = ${matchedMatterId}) and ${matterWriteAccessExists(auth, matchedMatterId)}`;
+  const smsClaimable = and(
+    eq(smsMessages.id, r.id),
+    eq(smsMessages.processed, false),
+    isNull(smsMessages.generatedHearingId),
+    eq(smsMessages.matchedMatterId, matchedMatterId),
+  );
+
+  const hearingInsert = deps.db.insert(hearings).select(sql`
+    select ${hearingId}, ${procedureId}, ${matchedMatterId}, ${hearingTitle}, ${parsed.courtRoom ?? null}, null, ${parsed.judge ?? null}, ${startsSec}, null, null, ${nowSec}
+    where exists (select 1 from "SmsMessage" where "id" = ${r.id} and "processed" = 0 and "generated_hearing_id" is null and "matched_matter_id" = ${matchedMatterId}) and ${writeGuard}
+  `);
+  const claim = deps.db
+    .update(smsMessages)
+    .set({ processed: true, processedAt: now, updatedAt: now })
+    .where(and(smsClaimable, writeGuard))
+    .returning({ id: smsMessages.id });
+  const backRef = deps.db
+    .update(smsMessages)
+    .set({ generatedHearingId: hearingId, updatedAt: now })
+    .where(and(eq(smsMessages.id, r.id), sql`exists (select 1 from "Hearing" where "id" = ${hearingId})`));
+
+  const results = await deps.db.batch([hearingInsert, claim, backRef]);
+  if ((results[1] as unknown[]).length === 0) {
+    throw new DomainError("INVALID_STATE", "该短信已处理、已生成开庭、关联案件已变更或案件已归档，无法生成");
+  }
+  await deps.audit.record(auth, {
+    action: "HEARING_CREATE",
+    targetType: "Hearing",
+    targetId: hearingId,
+    detail: { matterId: matchedMatterId, procedureId, startsAt: startsAt.toISOString() },
   });
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_HEARING",
     targetType: "SmsMessage",
     targetId: r.id,
-    detail: { matterId: r.matchedMatterId, hearingId: hearing.id },
+    detail: { matterId: r.matchedMatterId, hearingId },
   });
-  return { id: r.id, hearingId: hearing.id, processed: true };
+  return { id: r.id, hearingId, processed: true };
 }
 
 export const GenerateDeadlineInput = z.object({
   smsId: z.string().min(1),
   procedureId: z.string().min(1).optional(),
-  title: z.string().max(200).optional(),
+  title: z.string().trim().min(1).max(200).optional(),
   dueAt: z.coerce.date().optional(),
   category: z.string().max(40).optional(),
 });
@@ -335,42 +339,59 @@ export async function generateDeadlineFromSms(deps: Deps, auth: AuthContext, raw
   const procedureId = await resolveProcedure(deps, r.matchedMatterId, parsed, input.procedureId);
   await assertGeneratableProcedure(deps, auth, procedureId); // all addDeadline preconditions, pre-claim
 
-  // Claim + create + back-reference in ONE transaction (see gen-hearing): no
-  // window where a deadline exists while the SMS link is NULL; claim requires
-  // processed=false AND no deadline yet; a throw rolls the whole thing back.
+  // Claim + create + back-reference in ONE batch() (see generateHearingFromSms):
+  // a single transaction on libSQL AND D1 (D1 has no interactive transactions),
+  // addDeadline inlined as a guarded write. writeGuard re-checks ENGAGED procedure
+  // + write access at write time; smsClaimable pins processed=false, no deadline
+  // yet, and matchedMatterId. The deadline insert runs first (both guards), the
+  // claim (same guards) returns 0 and bails on any change, the back-ref fires only
+  // if the deadline was inserted — never a deadline without its SMS link, or vice
+  // versa. epoch seconds.
   const now = deps.clock.now();
-  const deadline = await deps.db.transaction(async (tx) => {
-    const txDeps = txDepsFor(deps, tx);
-    const claimed = await tx
-      .update(smsMessages)
-      .set({ processed: true, processedAt: now, updatedAt: now })
-      .where(
-        and(
-          eq(smsMessages.id, r.id),
-          eq(smsMessages.processed, false),
-          isNull(smsMessages.generatedDeadlineId),
-          eq(smsMessages.matchedMatterId, matchedMatterId),
-        ),
-      )
-      .returning({ id: smsMessages.id });
-    if (claimed.length === 0) throw new DomainError("INVALID_STATE", "该短信已处理、已生成期限或关联案件已变更，无法生成");
-    const dl = await addDeadline(txDeps, auth, {
-      procedureId,
-      title: input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限"),
-      dueAt,
-      category: input.category ?? "CUSTOM",
-      basis: parsed.summary,
-    });
-    await tx.update(smsMessages).set({ generatedDeadlineId: dl.id, updatedAt: now }).where(eq(smsMessages.id, r.id));
-    return dl;
+  const nowSec = Math.floor(now.getTime() / 1000);
+  const dueSec = Math.floor(dueAt.getTime() / 1000);
+  const deadlineId = deps.ids.newId();
+  const deadlineTitle = input.title ?? (parsed.appealDeadline ? "上诉期限" : "短信生成期限");
+  const deadlineCategory = input.category ?? "CUSTOM";
+  const writeGuard = sql`exists (select 1 from "MatterProcedure" p where p."id" = ${procedureId} and p."engagement" = 'ENGAGED' and p."matter_id" = ${matchedMatterId}) and ${matterWriteAccessExists(auth, matchedMatterId)}`;
+  const smsClaimable = and(
+    eq(smsMessages.id, r.id),
+    eq(smsMessages.processed, false),
+    isNull(smsMessages.generatedDeadlineId),
+    eq(smsMessages.matchedMatterId, matchedMatterId),
+  );
+
+  const deadlineInsert = deps.db.insert(deadlines).select(sql`
+    select ${deadlineId}, ${procedureId}, ${matchedMatterId}, ${deadlineCategory}, ${deadlineTitle}, ${dueSec}, ${parsed.summary ?? null}, null, 0, 0, null, ${nowSec}
+    where exists (select 1 from "SmsMessage" where "id" = ${r.id} and "processed" = 0 and "generated_deadline_id" is null and "matched_matter_id" = ${matchedMatterId}) and ${writeGuard}
+  `);
+  const claim = deps.db
+    .update(smsMessages)
+    .set({ processed: true, processedAt: now, updatedAt: now })
+    .where(and(smsClaimable, writeGuard))
+    .returning({ id: smsMessages.id });
+  const backRef = deps.db
+    .update(smsMessages)
+    .set({ generatedDeadlineId: deadlineId, updatedAt: now })
+    .where(and(eq(smsMessages.id, r.id), sql`exists (select 1 from "Deadline" where "id" = ${deadlineId})`));
+
+  const results = await deps.db.batch([deadlineInsert, claim, backRef]);
+  if ((results[1] as unknown[]).length === 0) {
+    throw new DomainError("INVALID_STATE", "该短信已处理、已生成期限、关联案件已变更或案件已归档，无法生成");
+  }
+  await deps.audit.record(auth, {
+    action: "DEADLINE_CREATE",
+    targetType: "Deadline",
+    targetId: deadlineId,
+    detail: { matterId: matchedMatterId, procedureId, category: deadlineCategory, dueAt: dueAt.toISOString() },
   });
   await deps.audit.record(auth, {
     action: "SMS_GENERATE_DEADLINE",
     targetType: "SmsMessage",
     targetId: r.id,
-    detail: { matterId: r.matchedMatterId, deadlineId: deadline.id },
+    detail: { matterId: r.matchedMatterId, deadlineId },
   });
-  return { id: r.id, deadlineId: deadline.id, processed: true };
+  return { id: r.id, deadlineId, processed: true };
 }
 
 export const MarkSmsProcessedInput = z.object({
