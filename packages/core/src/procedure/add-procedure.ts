@@ -4,12 +4,13 @@
  * - Authorization: management or the matter owner (DOMAIN-SPEC §2.2) — a role
  *   check alone is not enough (a LAWYER must not edit another lawyer's matter).
  * - Type must be allowed for the matter's category.
- * - Per-matter order is allocated from an ATOMIC counter (not SELECT-max+1),
- *   so concurrent adds get distinct orders without racing the unique constraint.
+ * - Per-matter order is allocated INSIDE the guarded insert via a correlated
+ *   `max("order")+1` subquery, with a retry loop on unique-constraint collisions —
+ *   atomic and gap-free without a separate counter row (D1 has no interactive tx).
  */
 import { z } from "zod";
-import { eq, max, sql } from "drizzle-orm";
-import { counters, matterProcedures, matters } from "@lawlink/db";
+import { eq, sql } from "drizzle-orm";
+import { matterProcedures, matters } from "@lawlink/db";
 import { DomainError, type AuthContext, type Deps, type MatterCategory } from "../types.js";
 import { requireRole } from "../permissions.js";
 import { assertMatterAccess, matterWriteAccessExists } from "../matter/access.js";
@@ -49,43 +50,41 @@ export async function addProcedure(deps: Deps, auth: AuthContext, rawInput: unkn
     );
   }
 
-  // Atomic per-matter order from a counter. The counter SELF-INITIALIZES from the
-  // current MAX(order), so matters created before this counter existed don't
-  // collide with unique(matterId, order); concurrent callers hit the conflict
-  // path and atomically +1. The upsert is a single atomic statement that RETURNS
-  // the order — no interactive transaction needed (works on libSQL AND D1). A
-  // failed insert below would only leave an unused counter value (a harmless gap,
-  // same as case-number allocation).
-  const [{ maxOrder }] = await deps.db
-    .select({ maxOrder: max(matterProcedures.order) })
-    .from(matterProcedures)
-    .where(eq(matterProcedures.matterId, input.matterId));
-  const seed = (maxOrder ?? 0) + 1;
-
-  const [counter] = await deps.db
-    .insert(counters)
-    .values({ key: `proc-order-${input.matterId}`, value: seed })
-    .onConflictDoUpdate({ target: counters.key, set: { value: sql`${counters.value} + 1` } })
-    .returning({ value: counters.value });
-  const order = counter.value;
-
-  // Write-time guard (replaces the interactive transaction's in-tx re-read): a
-  // correlated INSERT … SELECT … WHERE matterWriteAccessExists(...). If the matter
-  // was archived OR the caller lost owner/member access (a concurrent
-  // setMatterTeam) between the preflight above and here, this inserts 0 rows and
-  // we reject — re-checking authorization AND archived status atomically at write
-  // time. created_at is epoch seconds, matching drizzle's integer timestamp.
+  // Single atomic write that does everything the interactive transaction did:
+  //  - allocates "order" inline via a correlated `coalesce(max("order"),0)+1`
+  //    subquery (no separate counter row to leave gaps in);
+  //  - re-checks authorization AND archived status at WRITE time via
+  //    `WHERE matterWriteAccessExists(...)` — if the matter was archived OR the
+  //    caller lost owner/member access (a concurrent setMatterTeam) since the
+  //    preflight above, it inserts 0 rows and we reject.
+  // Two concurrent adds can compute the same max+1; one wins, the other trips
+  // unique(matterId, order) and RETRIES (the failed insert is atomic — it wrote
+  // nothing), recomputing a fresh max+1. created_at is epoch seconds, matching
+  // drizzle's integer timestamp. Works identically on libSQL and D1.
   const id = deps.ids.newId();
   const createdSec = Math.floor(now.getTime() / 1000);
-  const inserted = (await deps.db.all(sql`
-    insert into ${matterProcedures}
-      ("id", "matter_id", "type", "engagement", "order", "case_number", "handling_agency", "handler", "status", "created_at")
-    select ${id}, ${input.matterId}, ${input.type}, ${input.engagement}, ${order},
-      ${input.caseNumber ?? null}, ${input.handlingAgency ?? null}, ${input.handler ?? null}, 'PENDING', ${createdSec}
-    where ${matterWriteAccessExists(auth, input.matterId)}
-    returning "id"
-  `)) as unknown[];
+  const MAX_ATTEMPTS = 5;
+  let inserted: Array<{ order: number }> = [];
+  for (let attempt = 1; ; attempt++) {
+    try {
+      inserted = (await deps.db.all(sql`
+        insert into ${matterProcedures}
+          ("id", "matter_id", "type", "engagement", "order", "case_number", "handling_agency", "handler", "status", "created_at")
+        select ${id}, ${input.matterId}, ${input.type}, ${input.engagement},
+          (select coalesce(max("order"), 0) + 1 from "MatterProcedure" where "matter_id" = ${input.matterId}),
+          ${input.caseNumber ?? null}, ${input.handlingAgency ?? null}, ${input.handler ?? null}, 'PENDING', ${createdSec}
+        where ${matterWriteAccessExists(auth, input.matterId)}
+        returning "order"
+      `)) as Array<{ order: number }>;
+      break;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/UNIQUE/i.test(msg) && attempt < MAX_ATTEMPTS) continue;
+      throw err;
+    }
+  }
   if (inserted.length === 0) throw new DomainError("INVALID_STATE", "案件已归档或无写入权限，不能新增程序");
+  const order = inserted[0].order;
 
   const result = { id, matterId: input.matterId, type: input.type, engagement: input.engagement, order };
 
