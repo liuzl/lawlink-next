@@ -1,9 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src"],
-  // The Node entry (index.ts/server.ts) and the Cloudflare Worker entry
-  // (worker.ts/do.ts) have conflicting ambient globals (Node File vs Workers
-  // File). Keep the Worker files out of the Node program; they are typechecked
-  // by tsconfig.worker.json with @cloudflare/workers-types instead.
-  "exclude": ["src/worker.ts", "src/do.ts"]
+  // The Hono app (index.ts) is the single entry for BOTH runtimes: Node via
+  // server.ts, and Cloudflare via wrangler (esbuild bundles index.ts for the
+  // Worker — there is no separate Worker source/program). Typechecked once here
+  // under Node; Cloudflare bindings reach it through the typed `c.env` (Bindings).
+  "include": ["src"]
 }

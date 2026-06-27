@@ -1,22 +1,37 @@
-# Cloudflare-native runtime (Stage 1): the whole app runs inside ONE Durable
-# Object with embedded SQLite (real synchronous transactions). The Worker entry
-# (src/worker.ts) forwards every request to that singleton DO. Local dev:
-# `wrangler dev` runs a real DO-backed SQLite via miniflare — no CF account.
+# Cloudflare-native runtime: the Hono app (src/index.ts) runs directly as the
+# Worker (a Hono app's default export IS a Workers fetch handler) over Cloudflare
+# D1 (the `DB` binding) + R2 (`STORAGE`). The same app runs under Node via
+# src/server.ts, where these bindings are absent and it falls back to libSQL + fs.
 #
-# Stage 1 mounts only health/login/list-matters to prove the stack. The full
-# route set + SPA assets + R2 + the transaction sync-rewrite are Stage 2.
+# Local dev: `pnpm --filter @lawlink/api d1:migrate:local` then `wrangler dev`
+# (miniflare runs a real local D1-backed SQLite + R2 — no Cloudflare account).
 name = "lawlink-next"
-main = "src/worker.ts"
+main = "src/index.ts"
 compatibility_date = "2026-03-12"
 compatibility_flags = ["nodejs_compat"]
 
-[[durable_objects.bindings]]
-name = "LAWLINK_DO"
-class_name = "LawlinkDO"
+# Built SPA. `run_worker_first` routes /api/* to the Worker; every other path is
+# served from the static build, with client-router paths falling back to the SPA
+# shell (index.html) instead of a 404.
+[assets]
+directory = "../web/dist"
+not_found_handling = "single-page-application"
+run_worker_first = ["/api/*"]
 
-[[migrations]]
-tag = "v1"
-new_sqlite_classes = ["LawlinkDO"]
+# D1: bound as `DB` (env.DB → createD1Db). migrations_dir points at the Drizzle
+# migration set so `wrangler d1 migrations apply` runs the same SQL as the Node
+# libSQL migrator. Replace database_id with the real id from `wrangler d1 create
+# lawlink-db` before any --remote use; the placeholder is fine for --local.
+[[d1_databases]]
+binding = "DB"
+database_name = "lawlink-db"
+database_id = "00000000-0000-0000-0000-000000000000"
+migrations_dir = "../../packages/db/migrations"
+
+# R2: bound as `STORAGE` (env.STORAGE → createR2Storage) for document/template blobs.
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "lawlink-storage"
 
 [observability]
 enabled = true
@@ -25,7 +40,3 @@ enabled = true
 # (a real secret overrides this var).
 [vars]
 LAWLINK_JWT_SECRET = "dev-only-secret-change-me-0123456789abcdef"
-
-# Stage 2 will add (mirroring baize):
-#   [assets] directory = "../web/dist", not_found_handling = "single-page-application", run_worker_first = ["/api/*"]
-#   [[r2_buckets]] binding = "STORAGE", bucket_name = "lawlink-storage"

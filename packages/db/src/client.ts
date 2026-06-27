@@ -3,10 +3,15 @@
  * so the underlying driver (libSQL locally, D1 on Cloudflare) is swappable.
  */
 import { drizzle } from "drizzle-orm/libsql";
+import { drizzle as drizzleD1, type AnyD1Database } from "drizzle-orm/d1";
 import { createClient } from "@libsql/client";
 import * as schema from "./schema.js";
 
-/** Drizzle instance type the core layer programs against. */
+/** Drizzle instance type the core layer programs against. The libSQL and D1
+ * drivers both extend BaseSQLiteDatabase<'async', …> and expose the same methods
+ * the core uses (select/insert/update/delete/all/run/batch), so the core is
+ * driver-agnostic; createD1Db returns a structurally-identical handle (it differs
+ * only in the generic ResultType param, hence the cast). */
 export type Database = ReturnType<typeof drizzle<typeof schema>>;
 
 /** Local / self-hosted: libSQL (a SQLite file, e.g. "file:./lawlink.db"). */
@@ -19,6 +24,8 @@ export function createDb(url: string): Database {
   return drizzle(client, { schema });
 }
 
-// Cloudflare D1 (Workers) — added in P5:
-//   import { drizzle as drizzleD1 } from "drizzle-orm/d1";
-//   export const createD1Db = (binding: D1Database) => drizzleD1(binding, { schema });
+/** Cloudflare D1 (Workers): wrap the `env.DB` binding. D1's `batch()` is atomic,
+ * the same contract the core's D1-compatible transactions rely on. */
+export function createD1Db(binding: AnyD1Database): Database {
+  return drizzleD1(binding, { schema }) as unknown as Database;
+}

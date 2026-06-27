@@ -105,24 +105,41 @@ import {
   previewTemplate,
   generateFromTemplate,
   createFsStorage,
+  createR2Storage,
   DomainError,
   type AuthContext,
   type Deps,
 } from "@lawlink/core";
-import { createDb } from "@lawlink/db";
+import { createDb, createD1Db } from "@lawlink/db";
 
-/** Real JWT secret — throws if unset/placeholder (no forgeable fallback). */
-function getSecret(): string {
-  return requireJwtSecret(process.env.LAWLINK_JWT_SECRET);
+/**
+ * Runtime bindings. On Cloudflare these come from `c.env` (D1 + R2 + secret/vars
+ * from wrangler.toml); under Node (`server.ts`) `c.env` is empty and we fall back
+ * to `process.env` + libSQL/fs. Either way the same app + the same Deps shape.
+ */
+type Bindings = {
+  DB?: Parameters<typeof createD1Db>[0];
+  STORAGE?: Parameters<typeof createR2Storage>[0];
+  LAWLINK_JWT_SECRET?: string;
+  LAWLINK_CORS_ORIGIN?: string;
+};
+
+/** Real JWT secret — throws if unset/placeholder (no forgeable fallback). Prefers
+ * the Workers binding, falls back to the Node process env. */
+function getSecret(env: Bindings): string {
+  return requireJwtSecret(env.LAWLINK_JWT_SECRET ?? process.env.LAWLINK_JWT_SECRET);
 }
 
-/** `secret` is only needed by token-issuing routes (login). `ctx` carries the
- * request ip/userAgent for the audit trail. */
-function buildDeps(secret = "", ctx?: { ip?: string; userAgent?: string }): Deps {
-  const db = createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db");
+/** Assemble Deps for one request. `db`/`storage` come from the Cloudflare
+ * bindings when present (D1 + R2), else Node libSQL + fs. `secret` is only needed
+ * by token-issuing routes (login). `ctx` carries the request ip/userAgent. */
+function buildDeps(env: Bindings, secret = "", ctx?: { ip?: string; userAgent?: string }): Deps {
+  const db = env.DB ? createD1Db(env.DB) : createDb(process.env.LAWLINK_DB_URL ?? "file:./lawlink.db");
   const ids = { newId: () => randomUUID() };
   const clock = { now: () => new Date() };
-  const storage = createFsStorage(process.env.LAWLINK_STORAGE_DIR ?? "./storage");
+  const storage = env.STORAGE
+    ? createR2Storage(env.STORAGE)
+    : createFsStorage(process.env.LAWLINK_STORAGE_DIR ?? "./storage");
   return { db, ids, clock, secrets: { jwt: secret }, audit: createAuditSink(db, ids, clock, ctx), storage };
 }
 
@@ -152,17 +169,18 @@ function fail(c: Context, err: unknown) {
   return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
 }
 
-type Env = { Variables: { auth: AuthContext } };
+type Env = { Bindings: Bindings; Variables: { auth: AuthContext } };
 const app = new Hono<Env>();
 
-// Allow the SPA dev server (and configured origins) to call the API.
-app.use("/api/*", cors({ origin: (process.env.LAWLINK_CORS_ORIGIN ?? "*") }));
+// Allow the SPA dev server (and configured origins) to call the API. Origin is
+// resolved per-request so the Workers binding (c.env) wins over the Node env.
+app.use("/api/*", cors({ origin: (_origin, c) => c.env?.LAWLINK_CORS_ORIGIN ?? process.env.LAWLINK_CORS_ORIGIN ?? "*" }));
 
 app.get("/api/health", (c) => c.json({ name: "lawlink-next", status: "ok" }));
 
 app.get("/api/dashboard", requireAuth, async (c) => {
   try {
-    return c.json(await getDashboard(buildDeps(), c.get("auth")));
+    return c.json(await getDashboard(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
@@ -172,7 +190,7 @@ app.get("/api/audit", requireAuth, async (c) => {
   try {
     const limit = c.req.query("limit");
     return c.json(
-      await listAudit(buildDeps(), c.get("auth"), {
+      await listAudit(buildDeps(c.env), c.get("auth"), {
         action: c.req.query("action"),
         limit: limit ? Number(limit) : undefined,
       }),
@@ -184,7 +202,7 @@ app.get("/api/audit", requireAuth, async (c) => {
 
 app.post("/api/auth/login", async (c) => {
   try {
-    return c.json(await login(buildDeps(getSecret(), auditCtx(c)), await c.req.json()));
+    return c.json(await login(buildDeps(c.env, getSecret(c.env), auditCtx(c)), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -195,7 +213,7 @@ async function requireAuth(c: Context<Env>, next: Next) {
   const header = c.req.header("authorization") ?? "";
   const token = header.startsWith("Bearer ") ? header.slice(7) : "";
   try {
-    c.set("auth", await verifyToken(getSecret(), token));
+    c.set("auth", await verifyToken(getSecret(c.env), token));
   } catch (err) {
     return fail(c, err);
   }
@@ -204,7 +222,7 @@ async function requireAuth(c: Context<Env>, next: Next) {
 
 app.get("/api/intakes", requireAuth, async (c) => {
   try {
-    return c.json(await listIntakes(buildDeps(), c.get("auth")));
+    return c.json(await listIntakes(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
@@ -212,7 +230,7 @@ app.get("/api/intakes", requireAuth, async (c) => {
 
 app.post("/api/intakes", requireAuth, async (c) => {
   try {
-    return c.json(await createIntake(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createIntake(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -222,7 +240,7 @@ app.post("/api/intakes/:id/decline", requireAuth, async (c) => {
   try {
     const body = await c.req.json<{ reason: string }>();
     return c.json(
-      await declineIntake(buildDeps("", auditCtx(c)), c.get("auth"), {
+      await declineIntake(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), {
         intakeId: c.req.param("id"),
         reason: body.reason,
       }),
@@ -235,7 +253,7 @@ app.post("/api/intakes/:id/decline", requireAuth, async (c) => {
 app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
   try {
     return c.json(
-      await convertIntake(buildDeps("", auditCtx(c)), c.get("auth"), { intakeId: c.req.param("id") }),
+      await convertIntake(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { intakeId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -245,7 +263,7 @@ app.post("/api/intakes/:id/convert", requireAuth, async (c) => {
 
 app.post("/api/conflicts/check", requireAuth, async (c) => {
   try {
-    return c.json(await runConflictCheck(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()));
+    return c.json(await runConflictCheck(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -253,7 +271,7 @@ app.post("/api/conflicts/check", requireAuth, async (c) => {
 
 app.get("/api/clients", requireAuth, async (c) => {
   try {
-    return c.json(await listClients(buildDeps(), c.get("auth")));
+    return c.json(await listClients(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
@@ -261,7 +279,7 @@ app.get("/api/clients", requireAuth, async (c) => {
 
 app.post("/api/clients", requireAuth, async (c) => {
   try {
-    return c.json(await createClient(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createClient(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -269,7 +287,7 @@ app.post("/api/clients", requireAuth, async (c) => {
 
 app.get("/api/clients/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getClient(buildDeps(), c.get("auth"), { clientId: c.req.param("id") ?? "" }));
+    return c.json(await getClient(buildDeps(c.env), c.get("auth"), { clientId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -278,7 +296,7 @@ app.get("/api/clients/:id", requireAuth, async (c) => {
 app.post("/api/clients/:id/contacts", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addContact(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, clientId: c.req.param("id") }), 201);
+    return c.json(await addContact(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, clientId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -286,7 +304,7 @@ app.post("/api/clients/:id/contacts", requireAuth, async (c) => {
 
 app.get("/api/matters", requireAuth, async (c) => {
   try {
-    return c.json(await listMatters(buildDeps(), c.get("auth")));
+    return c.json(await listMatters(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
@@ -294,7 +312,7 @@ app.get("/api/matters", requireAuth, async (c) => {
 
 app.get("/api/matters/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getMatter(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await getMatter(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -304,7 +322,7 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await addProcedure(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      await addProcedure(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -314,7 +332,7 @@ app.post("/api/matters/:id/procedures", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/members", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterMembers(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterMembers(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -323,7 +341,7 @@ app.get("/api/matters/:id/members", requireAuth, async (c) => {
 app.put("/api/matters/:id/team", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await setMatterTeam(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+    return c.json(await setMatterTeam(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -331,7 +349,7 @@ app.put("/api/matters/:id/team", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/tasks", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterTasks(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterTasks(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -339,14 +357,14 @@ app.get("/api/matters/:id/tasks", requireAuth, async (c) => {
 app.post("/api/matters/:id/tasks", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addTask(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await addTask(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/tasks/:id/complete", requireAuth, async (c) => {
   try {
-    return c.json(await completeTask(buildDeps("", auditCtx(c)), c.get("auth"), { taskId: c.req.param("id") }));
+    return c.json(await completeTask(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { taskId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -354,7 +372,7 @@ app.post("/api/tasks/:id/complete", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/notes", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterNotes(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterNotes(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -362,7 +380,7 @@ app.get("/api/matters/:id/notes", requireAuth, async (c) => {
 app.post("/api/matters/:id/notes", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addNote(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await addNote(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -370,7 +388,7 @@ app.post("/api/matters/:id/notes", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/hearings", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterHearings(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterHearings(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -378,7 +396,7 @@ app.get("/api/matters/:id/hearings", requireAuth, async (c) => {
 app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await addHearing(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
+    return c.json(await addHearing(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -386,7 +404,7 @@ app.post("/api/procedures/:id/hearings", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/archive-checklist", requireAuth, async (c) => {
   try {
-    return c.json(await getArchiveChecklist(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await getArchiveChecklist(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -394,7 +412,7 @@ app.get("/api/matters/:id/archive-checklist", requireAuth, async (c) => {
 app.post("/api/matters/:id/archive", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await archiveMatter(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+    return c.json(await archiveMatter(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -402,7 +420,7 @@ app.post("/api/matters/:id/archive", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/finance", requireAuth, async (c) => {
   try {
-    return c.json(await getMatterFinance(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await getMatterFinance(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -410,7 +428,7 @@ app.get("/api/matters/:id/finance", requireAuth, async (c) => {
 app.post("/api/matters/:id/fee-entries", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await createFeeEntry(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await createFeeEntry(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -418,14 +436,14 @@ app.post("/api/matters/:id/fee-entries", requireAuth, async (c) => {
 app.post("/api/matters/:id/commission-plan", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await setCommissionPlan(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
+    return c.json(await setCommissionPlan(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/fee-entries/:id/delete", requireAuth, async (c) => {
   try {
-    return c.json(await deleteFeeEntry(buildDeps("", auditCtx(c)), c.get("auth"), { feeEntryId: c.req.param("id") }));
+    return c.json(await deleteFeeEntry(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { feeEntryId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -433,7 +451,7 @@ app.post("/api/fee-entries/:id/delete", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/deadlines", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterDeadlines(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterDeadlines(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -443,7 +461,7 @@ app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await applyDeadlineRules(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }),
+      await applyDeadlineRules(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, procedureId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -453,7 +471,7 @@ app.post("/api/procedures/:id/deadlines/compute", requireAuth, async (c) => {
 
 app.post("/api/deadlines/:id/complete", requireAuth, async (c) => {
   try {
-    return c.json(await completeDeadline(buildDeps("", auditCtx(c)), c.get("auth"), { deadlineId: c.req.param("id") }));
+    return c.json(await completeDeadline(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { deadlineId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -461,7 +479,7 @@ app.post("/api/deadlines/:id/complete", requireAuth, async (c) => {
 
 app.get("/api/matters/:id/preservations", requireAuth, async (c) => {
   try {
-    return c.json(await listMatterPreservations(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listMatterPreservations(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -471,7 +489,7 @@ app.post("/api/matters/:id/preservations", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await createPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
+      await createPreservation(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }),
       201,
     );
   } catch (err) {
@@ -483,7 +501,7 @@ app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
     return c.json(
-      await renewPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, preservationId: c.req.param("id") }),
+      await renewPreservation(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, preservationId: c.req.param("id") }),
     );
   } catch (err) {
     return fail(c, err);
@@ -492,7 +510,7 @@ app.post("/api/preservations/:id/renew", requireAuth, async (c) => {
 
 app.post("/api/preservations/:id/lift", requireAuth, async (c) => {
   try {
-    return c.json(await liftPreservation(buildDeps("", auditCtx(c)), c.get("auth"), { preservationId: c.req.param("id") }));
+    return c.json(await liftPreservation(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { preservationId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -501,7 +519,7 @@ app.post("/api/preservations/:id/lift", requireAuth, async (c) => {
 // ── folders (卷宗) ────────────────────────────────────────────────────────────
 app.get("/api/matters/:id/folders", requireAuth, async (c) => {
   try {
-    return c.json(await listFolders(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listFolders(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -509,7 +527,7 @@ app.get("/api/matters/:id/folders", requireAuth, async (c) => {
 app.post("/api/matters/:id/folders", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await createFolder(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await createFolder(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -517,14 +535,14 @@ app.post("/api/matters/:id/folders", requireAuth, async (c) => {
 app.post("/api/folders/:id/rename", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await renameFolder(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, folderId: c.req.param("id") }));
+    return c.json(await renameFolder(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, folderId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/folders/:id/delete", requireAuth, async (c) => {
   try {
-    return c.json(await deleteFolder(buildDeps("", auditCtx(c)), c.get("auth"), { folderId: c.req.param("id") }));
+    return c.json(await deleteFolder(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { folderId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -533,7 +551,7 @@ app.post("/api/folders/:id/delete", requireAuth, async (c) => {
 // ── documents (材料/文书) ──────────────────────────────────────────────────────
 app.get("/api/matters/:id/documents", requireAuth, async (c) => {
   try {
-    return c.json(await listDocuments(buildDeps(), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
+    return c.json(await listDocuments(buildDeps(c.env), c.get("auth"), { matterId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -541,7 +559,7 @@ app.get("/api/matters/:id/documents", requireAuth, async (c) => {
 app.post("/api/matters/:id/documents", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await registerDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
+    return c.json(await registerDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, matterId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -572,7 +590,7 @@ app.post("/api/matters/:id/documents/upload", requireAuth, uploadBodyLimit, asyn
       sourceParty: (form.get("sourceParty") as string) || undefined,
       mimeType: file.type || undefined,
     };
-    return c.json(await uploadDocument(buildDeps("", auditCtx(c)), c.get("auth"), meta, bytes), 201);
+    return c.json(await uploadDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), meta, bytes), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -580,7 +598,7 @@ app.post("/api/matters/:id/documents/upload", requireAuth, uploadBodyLimit, asyn
 // Authenticated download (streams the stored bytes).
 app.get("/api/documents/:id/download", requireAuth, async (c) => {
   try {
-    const { name, mimeType, bytes } = await getDocumentForDownload(buildDeps(), c.get("auth"), { documentId: c.req.param("id") ?? "" });
+    const { name, mimeType, bytes } = await getDocumentForDownload(buildDeps(c.env), c.get("auth"), { documentId: c.req.param("id") ?? "" });
     return new Response(bytes, {
       headers: {
         "content-type": mimeType,
@@ -594,21 +612,21 @@ app.get("/api/documents/:id/download", requireAuth, async (c) => {
 app.post("/api/documents/:id/move", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await moveDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
+    return c.json(await moveDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/documents/:id/submit", requireAuth, async (c) => {
   try {
-    return c.json(await submitDocumentForReview(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+    return c.json(await submitDocumentForReview(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/documents/:id/approve", requireAuth, async (c) => {
   try {
-    return c.json(await approveDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+    return c.json(await approveDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -616,21 +634,21 @@ app.post("/api/documents/:id/approve", requireAuth, async (c) => {
 app.post("/api/documents/:id/reject", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await rejectDocument(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
+    return c.json(await rejectDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/documents/:id/file", requireAuth, async (c) => {
   try {
-    return c.json(await fileDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+    return c.json(await fileDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/documents/:id/delete", requireAuth, async (c) => {
   try {
-    return c.json(await deleteDocument(buildDeps("", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
+    return c.json(await deleteDocument(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { documentId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -640,7 +658,7 @@ app.post("/api/documents/:id/delete", requireAuth, async (c) => {
 app.get("/api/notifications", requireAuth, async (c) => {
   try {
     return c.json(
-      await listNotifications(buildDeps(), c.get("auth"), {
+      await listNotifications(buildDeps(c.env), c.get("auth"), {
         unreadOnly: c.req.query("unread") === "true",
         limit: c.req.query("limit"),
       }),
@@ -651,28 +669,28 @@ app.get("/api/notifications", requireAuth, async (c) => {
 });
 app.get("/api/notifications/unread-count", requireAuth, async (c) => {
   try {
-    return c.json(await unreadNotificationCount(buildDeps(), c.get("auth")));
+    return c.json(await unreadNotificationCount(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/notifications/read-all", requireAuth, async (c) => {
   try {
-    return c.json(await markAllNotificationsRead(buildDeps(), c.get("auth")));
+    return c.json(await markAllNotificationsRead(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/notifications/read", requireAuth, async (c) => {
   try {
-    return c.json(await markNotificationsRead(buildDeps(), c.get("auth"), await c.req.json()));
+    return c.json(await markNotificationsRead(buildDeps(c.env), c.get("auth"), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/notifications/:id/read", requireAuth, async (c) => {
   try {
-    return c.json(await markNotificationRead(buildDeps(), c.get("auth"), { notificationId: c.req.param("id") }));
+    return c.json(await markNotificationRead(buildDeps(c.env), c.get("auth"), { notificationId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -681,7 +699,7 @@ app.post("/api/notifications/:id/read", requireAuth, async (c) => {
 // ── schedule (日程) ────────────────────────────────────────────────────────────
 app.get("/api/schedule", requireAuth, async (c) => {
   try {
-    return c.json(await getSchedule(buildDeps(), c.get("auth"), { from: c.req.query("from"), to: c.req.query("to") }));
+    return c.json(await getSchedule(buildDeps(c.env), c.get("auth"), { from: c.req.query("from"), to: c.req.query("to") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -691,7 +709,7 @@ app.get("/api/schedule", requireAuth, async (c) => {
 const templateBodyLimit = bodyLimit({ maxSize: 21 * 1024 * 1024, onError: (c) => c.json({ error: "模板超过 20MB 上限" }, 413) });
 app.get("/api/templates", requireAuth, async (c) => {
   try {
-    return c.json(await listTemplates(buildDeps(), c.get("auth"), { matterCategory: c.req.query("matterCategory") }));
+    return c.json(await listTemplates(buildDeps(c.env), c.get("auth"), { matterCategory: c.req.query("matterCategory") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -709,14 +727,14 @@ app.post("/api/templates/upload", requireAuth, templateBodyLimit, async (c) => {
       description: (form.get("description") as string) || undefined,
       applicableCategories: applicableRaw ? (JSON.parse(applicableRaw as string) as string[]) : undefined,
     };
-    return c.json(await createTemplate(buildDeps("", auditCtx(c)), c.get("auth"), meta, bytes), 201);
+    return c.json(await createTemplate(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), meta, bytes), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.get("/api/templates/:id/preview", requireAuth, async (c) => {
   try {
-    return c.json(await previewTemplate(buildDeps(), c.get("auth"), { templateId: c.req.param("id"), matterId: c.req.query("matterId") ?? "" }));
+    return c.json(await previewTemplate(buildDeps(c.env), c.get("auth"), { templateId: c.req.param("id"), matterId: c.req.query("matterId") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -724,14 +742,14 @@ app.get("/api/templates/:id/preview", requireAuth, async (c) => {
 app.post("/api/templates/:id/generate", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await generateFromTemplate(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, templateId: c.req.param("id") }), 201);
+    return c.json(await generateFromTemplate(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, templateId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/templates/:id/delete", requireAuth, async (c) => {
   try {
-    return c.json(await deleteTemplate(buildDeps("", auditCtx(c)), c.get("auth"), { templateId: c.req.param("id") }));
+    return c.json(await deleteTemplate(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { templateId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -740,21 +758,21 @@ app.post("/api/templates/:id/delete", requireAuth, async (c) => {
 // ── invoices (开票工作流) ──────────────────────────────────────────────────────
 app.get("/api/invoices", requireAuth, async (c) => {
   try {
-    return c.json(await listInvoiceRequests(buildDeps(), c.get("auth"), { status: c.req.query("status") }));
+    return c.json(await listInvoiceRequests(buildDeps(c.env), c.get("auth"), { status: c.req.query("status") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/invoices", requireAuth, async (c) => {
   try {
-    return c.json(await createInvoiceRequest(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createInvoiceRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.get("/api/invoices/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getInvoiceRequest(buildDeps(), c.get("auth"), { invoiceRequestId: c.req.param("id") ?? "" }));
+    return c.json(await getInvoiceRequest(buildDeps(c.env), c.get("auth"), { invoiceRequestId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -762,7 +780,7 @@ app.get("/api/invoices/:id", requireAuth, async (c) => {
 app.post("/api/invoices/:id/approve", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await approveInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
+    return c.json(await approveInvoice(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -770,7 +788,7 @@ app.post("/api/invoices/:id/approve", requireAuth, async (c) => {
 app.post("/api/invoices/:id/reject", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await rejectInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
+    return c.json(await rejectInvoice(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -778,7 +796,7 @@ app.post("/api/invoices/:id/reject", requireAuth, async (c) => {
 app.post("/api/invoices/:id/issue", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await issueInvoice(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
+    return c.json(await issueInvoice(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, invoiceRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -787,7 +805,7 @@ app.post("/api/invoices/:id/issue", requireAuth, async (c) => {
 // ── finance overview (全所财务台账) ─────────────────────────────────────────────
 app.get("/api/finance/overview", requireAuth, async (c) => {
   try {
-    return c.json(await getFinanceOverview(buildDeps(), c.get("auth"), { months: c.req.query("months") }));
+    return c.json(await getFinanceOverview(buildDeps(c.env), c.get("auth"), { months: c.req.query("months") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -797,7 +815,7 @@ app.get("/api/finance/overview", requireAuth, async (c) => {
 app.get("/api/reports", requireAuth, async (c) => {
   try {
     return c.json(
-      await getReport(buildDeps(), c.get("auth"), {
+      await getReport(buildDeps(c.env), c.get("auth"), {
         preset: c.req.query("preset"),
         start: c.req.query("start"),
         end: c.req.query("end"),
@@ -811,14 +829,14 @@ app.get("/api/reports", requireAuth, async (c) => {
 // ── users (用户目录, ADMIN) ─────────────────────────────────────────────────────
 app.get("/api/users", requireAuth, async (c) => {
   try {
-    return c.json(await listUsers(buildDeps(), c.get("auth"), { activeOnly: c.req.query("activeOnly") === "true" }));
+    return c.json(await listUsers(buildDeps(c.env), c.get("auth"), { activeOnly: c.req.query("activeOnly") === "true" }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.get("/api/users/assignable", requireAuth, async (c) => {
   try {
-    return c.json(await listAssignableUsers(buildDeps(), c.get("auth")));
+    return c.json(await listAssignableUsers(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
@@ -827,14 +845,14 @@ app.get("/api/users/assignable", requireAuth, async (c) => {
 // ── settings (设置, ADMIN) ─────────────────────────────────────────────────────
 app.get("/api/settings", requireAuth, async (c) => {
   try {
-    return c.json(await listSettings(buildDeps(), c.get("auth")));
+    return c.json(await listSettings(buildDeps(c.env), c.get("auth")));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/settings", requireAuth, async (c) => {
   try {
-    return c.json(await setSetting(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()));
+    return c.json(await setSetting(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()));
   } catch (err) {
     return fail(c, err);
   }
@@ -845,21 +863,21 @@ app.post("/api/settings", requireAuth, async (c) => {
 app.get("/api/seals/types", requireAuth, (c) => c.json(listSealTypes()));
 app.get("/api/seals", requireAuth, async (c) => {
   try {
-    return c.json(await listSealRequests(buildDeps(), c.get("auth"), { status: c.req.query("status") }));
+    return c.json(await listSealRequests(buildDeps(c.env), c.get("auth"), { status: c.req.query("status") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/seals", requireAuth, async (c) => {
   try {
-    return c.json(await createSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+    return c.json(await createSealRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.get("/api/seals/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getSealRequest(buildDeps(), c.get("auth"), { sealRequestId: c.req.param("id") ?? "" }));
+    return c.json(await getSealRequest(buildDeps(c.env), c.get("auth"), { sealRequestId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -867,7 +885,7 @@ app.get("/api/seals/:id", requireAuth, async (c) => {
 app.post("/api/seals/:id/approve", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await approveSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+    return c.json(await approveSealRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -875,7 +893,7 @@ app.post("/api/seals/:id/approve", requireAuth, async (c) => {
 app.post("/api/seals/:id/reject", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await rejectSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+    return c.json(await rejectSealRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -883,14 +901,14 @@ app.post("/api/seals/:id/reject", requireAuth, async (c) => {
 app.post("/api/seals/:id/stamp", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await stampSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
+    return c.json(await stampSealRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, sealRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/seals/:id/cancel", requireAuth, async (c) => {
   try {
-    return c.json(await cancelSealRequest(buildDeps("", auditCtx(c)), c.get("auth"), { sealRequestId: c.req.param("id") }));
+    return c.json(await cancelSealRequest(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { sealRequestId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -900,21 +918,21 @@ app.post("/api/seals/:id/cancel", requireAuth, async (c) => {
 app.get("/api/sms", requireAuth, async (c) => {
   try {
     const p = c.req.query("processed");
-    return c.json(await listSms(buildDeps(), c.get("auth"), { processed: p === undefined ? undefined : p === "true" }));
+    return c.json(await listSms(buildDeps(c.env), c.get("auth"), { processed: p === undefined ? undefined : p === "true" }));
   } catch (err) {
     return fail(c, err);
   }
 });
 app.post("/api/sms", requireAuth, async (c) => {
   try {
-    return c.json(await ingestSms(buildDeps("", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
+    return c.json(await ingestSms(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), await c.req.json()), 201);
   } catch (err) {
     return fail(c, err);
   }
 });
 app.get("/api/sms/:id", requireAuth, async (c) => {
   try {
-    return c.json(await getSms(buildDeps(), c.get("auth"), { smsId: c.req.param("id") ?? "" }));
+    return c.json(await getSms(buildDeps(c.env), c.get("auth"), { smsId: c.req.param("id") ?? "" }));
   } catch (err) {
     return fail(c, err);
   }
@@ -922,7 +940,7 @@ app.get("/api/sms/:id", requireAuth, async (c) => {
 app.post("/api/sms/:id/assign", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>();
-    return c.json(await assignSmsMatter(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
+    return c.json(await assignSmsMatter(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
@@ -930,7 +948,7 @@ app.post("/api/sms/:id/assign", requireAuth, async (c) => {
 app.post("/api/sms/:id/gen-hearing", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await generateHearingFromSms(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
+    return c.json(await generateHearingFromSms(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -938,7 +956,7 @@ app.post("/api/sms/:id/gen-hearing", requireAuth, async (c) => {
 app.post("/api/sms/:id/gen-deadline", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await generateDeadlineFromSms(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
+    return c.json(await generateDeadlineFromSms(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }), 201);
   } catch (err) {
     return fail(c, err);
   }
@@ -946,7 +964,7 @@ app.post("/api/sms/:id/gen-deadline", requireAuth, async (c) => {
 app.post("/api/sms/:id/processed", requireAuth, async (c) => {
   try {
     const body = await c.req.json<Record<string, unknown>>().catch(() => ({}));
-    return c.json(await markSmsProcessed(buildDeps("", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
+    return c.json(await markSmsProcessed(buildDeps(c.env, "", auditCtx(c)), c.get("auth"), { ...body, smsId: c.req.param("id") }));
   } catch (err) {
     return fail(c, err);
   }
