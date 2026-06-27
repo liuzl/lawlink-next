@@ -113,44 +113,51 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
   const now = deps.clock.now();
   const occurredAt = input.occurredAt ?? now;
 
-  const result = await deps.db.transaction(async (tx) => {
-    const id = deps.ids.newId();
-    await tx.insert(feeEntries).values({
-      id,
-      matterId: input.matterId,
-      billingId: null,
-      type: input.type,
-      amount: input.amount,
-      occurredAt,
-      invoiceNo: null,
-      payerOrPayee: input.payerOrPayee ?? null,
-      method: input.method ?? null,
-      note: input.note ?? null,
-      parentFeeEntryId: null,
-      beneficiaryUserId: null,
-      recordedById: auth.userId,
-      createdAt: now,
-    });
+  const id = deps.ids.newId();
+  const parent = deps.db.insert(feeEntries).values({
+    id,
+    matterId: input.matterId,
+    billingId: null,
+    type: input.type,
+    amount: input.amount,
+    occurredAt,
+    invoiceNo: null,
+    payerOrPayee: input.payerOrPayee ?? null,
+    method: input.method ?? null,
+    note: input.note ?? null,
+    parentFeeEntryId: null,
+    beneficiaryUserId: null,
+    recordedById: auth.userId,
+    createdAt: now,
+  });
 
-    let commissions = 0;
-    if (input.type === "RECEIVED") {
-      const plans = await tx
-        .select()
-        .from(commissionPlans)
-        .where(and(eq(commissionPlans.matterId, input.matterId), eq(commissionPlans.active, true)));
-      const receivedCents = toCents(input.amount);
-      // Cumulative (telescoping) allocation: each share is the difference of
-      // running-cumulative rounded amounts, so the children sum EXACTLY to
-      // round(received × Σpercent) and can never overpay the received amount.
-      let cumPercent = 0;
-      let prevCumCents = 0;
-      for (const plan of plans) {
-        cumPercent += Number(plan.percent);
-        const cumCents = percentOfCents(receivedCents, cumPercent);
-        const shareCents = cumCents - prevCumCents;
-        prevCumCents = cumCents;
-        if (shareCents === 0) continue;
-        await tx.insert(feeEntries).values({
+  // A RECEIVED entry atomically spawns COMMISSION children per the active plan.
+  // The plan is read just before the batch; the parent + all children then insert
+  // in ONE batch() — a single transaction on libSQL AND D1 (D1 has no interactive
+  // transactions) — so the COMMISSION children never exist without their parent.
+  // (The plan read is outside the batch: a concurrent setCommissionPlan could
+  // race, but that was always a same-instant ambiguity; atomicity of the spawn is
+  // what matters.)
+  const childInserts: (typeof parent)[] = [];
+  if (input.type === "RECEIVED") {
+    const plans = await deps.db
+      .select()
+      .from(commissionPlans)
+      .where(and(eq(commissionPlans.matterId, input.matterId), eq(commissionPlans.active, true)));
+    const receivedCents = toCents(input.amount);
+    // Cumulative (telescoping) allocation: each share is the difference of
+    // running-cumulative rounded amounts, so the children sum EXACTLY to
+    // round(received × Σpercent) and can never overpay the received amount.
+    let cumPercent = 0;
+    let prevCumCents = 0;
+    for (const plan of plans) {
+      cumPercent += Number(plan.percent);
+      const cumCents = percentOfCents(receivedCents, cumPercent);
+      const shareCents = cumCents - prevCumCents;
+      prevCumCents = cumCents;
+      if (shareCents === 0) continue;
+      childInserts.push(
+        deps.db.insert(feeEntries).values({
           id: deps.ids.newId(),
           matterId: input.matterId,
           billingId: null,
@@ -165,12 +172,17 @@ export async function createFeeEntry(deps: Deps, auth: AuthContext, rawInput: un
           beneficiaryUserId: plan.userId,
           recordedById: auth.userId,
           createdAt: now,
-        });
-        commissions++;
-      }
+        }),
+      );
     }
-    return { id, type: input.type, amount: input.amount, commissionsGenerated: commissions };
-  });
+  }
+
+  if (childInserts.length > 0) {
+    await deps.db.batch([parent, ...childInserts]);
+  } else {
+    await parent;
+  }
+  const result = { id, type: input.type, amount: input.amount, commissionsGenerated: childInserts.length };
 
   await deps.audit.record(auth, {
     action: "FEE_ENTRY_CREATE",
