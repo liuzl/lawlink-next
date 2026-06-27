@@ -104,6 +104,7 @@ import {
   previewTemplate,
   generateFromTemplate,
   createFsStorage,
+  DomainError,
   type AuthContext,
   type Deps,
   type Role,
@@ -161,7 +162,37 @@ function q(params: Record<string, unknown>): string {
   return parts.length ? `?${parts.join("&")}` : "";
 }
 
-/** Issue an HTTP request to the deployed API; throw on non-2xx with the API error. */
+/** Stable machine-readable error code → HTTP status (mirrors the API). */
+const HTTP: Record<string, number> = { VALIDATION: 400, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, INVALID_STATE: 409, BAD_USAGE: 400, INTERNAL: 500 };
+/** error code → process exit code, so agents can branch on the exit status alone. */
+const EXIT: Record<string, number> = { VALIDATION: 2, BAD_USAGE: 2, FORBIDDEN: 3, NOT_FOUND: 4, CONFLICT: 5, INVALID_STATE: 5, INTERNAL: 1 };
+
+interface NormErr {
+  code: string;
+  message: string;
+  http?: number;
+}
+
+/** An HTTP error carrying the API's machine code + status (thrown by apiCall). */
+class ApiError extends Error {
+  constructor(message: string, readonly code: string, readonly http: number) {
+    super(message);
+  }
+}
+
+/** Normalize ANY thrown value into { code, message, http } for the error envelope. */
+function toError(err: unknown): NormErr {
+  if (err instanceof ApiError) return { code: err.code, message: err.message, http: err.http };
+  if (err instanceof DomainError) return { code: err.code, message: err.message, http: HTTP[err.code] };
+  // Zod (local input validation) — match structurally to avoid a zod dep here.
+  if (err && typeof err === "object" && (err as { name?: string }).name === "ZodError") {
+    const issues = (err as { issues?: { message: string }[] }).issues ?? [];
+    return { code: "VALIDATION", message: issues.map((i) => i.message).join("；") || "输入校验失败", http: 400 };
+  }
+  return { code: "INTERNAL", message: err instanceof Error ? err.message : String(err) };
+}
+
+/** Issue an HTTP request to the deployed API; throw ApiError(code, http) on non-2xx. */
 async function apiCall(method: string, path: string, body: unknown, token: string | undefined, base: string): Promise<unknown> {
   const res = await fetch(base + path, {
     method,
@@ -179,25 +210,36 @@ async function apiCall(method: string, path: string, body: unknown, token: strin
     data = text;
   }
   if (!res.ok) {
-    const msg = data && typeof data === "object" && "error" in data ? (data as { error: string }).error : `HTTP ${res.status}: ${text.slice(0, 200)}`;
-    throw new Error(msg);
+    const d = (data ?? {}) as { error?: string; code?: string };
+    throw new ApiError(d.error ?? `HTTP ${res.status}: ${text.slice(0, 200)}`, d.code ?? "INTERNAL", res.status);
   }
   return data;
 }
 
-function emit(format: string, data: unknown): void {
-  if (format === "text") process.stdout.write(String(data) + "\n");
-  else process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+/** True when --raw: print bare data on success / error to stderr (pipe-friendly). */
+function rawMode(): boolean {
+  return !!program.opts().raw;
 }
 
-/** Run an action, printing JSON errors and setting a non-zero exit code. */
-function run(fn: () => Promise<unknown>, format = "json"): void {
+/**
+ * Run an action and emit a consistent, agent-parseable result:
+ *  - default: a `{ "ok": true, "data": … }` / `{ "ok": false, "error": { code, message, http } }`
+ *    envelope on STDOUT (single stream, one JSON.parse, check `.ok`);
+ *  - `--raw`: bare data on stdout (success) / `{ "error": … }` on stderr (failure).
+ * Exit code is 0 on success, else mapped from the error code (see EXIT).
+ */
+function run(fn: () => Promise<unknown>): void {
   Promise.resolve()
     .then(fn)
-    .then((data) => emit(format, data))
+    .then((data) => {
+      if (rawMode()) process.stdout.write(JSON.stringify(data, null, 2) + "\n");
+      else process.stdout.write(JSON.stringify({ ok: true, data }, null, 2) + "\n");
+    })
     .catch((err) => {
-      emit("json", { error: err instanceof Error ? err.message : String(err) });
-      process.exitCode = 1;
+      const e = toError(err);
+      const line = JSON.stringify(rawMode() ? { error: e } : { ok: false, error: e }, null, 2) + "\n";
+      (rawMode() ? process.stderr : process.stdout).write(line);
+      process.exitCode = EXIT[e.code] ?? 1;
     });
 }
 
@@ -212,17 +254,16 @@ interface Spec {
    * core (and the API in remote mode) do the real zod validation. */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   local: (auth: AuthContext, input: any) => Promise<unknown> | unknown;
-  format?: string;
 }
 
 /** Dispatch a command in remote (HTTP) or local (in-process) mode. */
-function dispatch(opts: { token?: string; format?: string }, spec: Spec): void {
+function dispatch(opts: { token?: string }, spec: Spec): void {
   const base = remoteBase();
   run(async () => {
     const input = spec.input ?? {};
     if (base) return apiCall(spec.method, spec.path, spec.method === "GET" ? undefined : input, tokenOf(opts), base);
     return spec.local(await resolveAuth(tokenOf(opts)), input);
-  }, spec.format ?? opts.format ?? "json");
+  });
 }
 
 const program = new Command();
@@ -231,16 +272,31 @@ program
   .description("LawLink CLI — case management for lawyers, built for humans and agents")
   .option("--remote", "call the deployed API instead of the local DB (or set LAWLINK_REMOTE=1)")
   .option("--api-url <url>", `API base for --remote (default ${DEFAULT_REMOTE}; or LAWLINK_API_URL)`)
-  .version("0.0.0");
+  .option("--raw", "print bare data on stdout (errors to stderr) instead of the {ok,data} envelope")
+  .version("0.0.0")
+  // Route commander's own usage errors (unknown command / missing option) through
+  // the SAME JSON envelope instead of plain text on stderr, so an agent never
+  // gets non-JSON. exitOverride() makes commander throw; we catch below.
+  .exitOverride()
+  .configureOutput({ writeErr: () => {} });
 
 // ── db (LOCAL only — operates on the libSQL file) ───────────────────────────
 const db = program.command("db").description("数据库维护（仅本地 libSQL）");
 
 db.command("migrate")
-  .description("Apply pending migrations")
+  .description("Apply pending migrations (local libSQL; run from source, not the bundled binary)")
   .action(() =>
     run(async () => {
-      await runMigrations(buildDeps().db);
+      try {
+        await runMigrations(buildDeps().db);
+      } catch (e) {
+        // The bundled binary can't resolve the Drizzle migrations folder (path is
+        // relative to the @lawlink/db source). Local schema setup is a dev task.
+        if (e instanceof Error && /undefined|migrations|ENOENT/i.test(e.message)) {
+          throw new DomainError("INVALID_STATE", "本地建表请用源码方式：pnpm --filter @lawlink/cli dev db migrate（打包二进制不含迁移文件）");
+        }
+        throw e;
+      }
       return { migrated: true };
     }),
   );
@@ -312,7 +368,6 @@ intake
   .option("--title <title>", "标题（留空自动生成）")
   .option("--claim-amount <amount>", "标的额（最多两位小数）")
   .option("--token <token>", "登录态（缺省用 env stub）")
-  .option("--format <format>", "json|text", "json")
   .action((opts) =>
     dispatch(opts, {
       method: "POST",
@@ -1613,4 +1668,46 @@ sms
     }),
   );
 
-program.parseAsync(process.argv);
+// ── meta (agent capability discovery) ──────────────────────────────────────
+/** Recursively describe a command tree (commander introspection) as JSON. */
+function describe(cmd: Command): unknown {
+  return {
+    name: cmd.name(),
+    description: cmd.description() || undefined,
+    options: cmd.options
+      .filter((o) => o.long !== "--help" && o.long !== "--version")
+      .map((o) => ({ flags: o.flags, description: o.description || undefined, required: o.required ?? false, default: o.defaultValue })),
+    commands: cmd.commands.filter((c) => c.name() !== "meta" && c.name() !== "help").map(describe),
+  };
+}
+
+program
+  .command("meta")
+  .description("机器可读的能力清单（agent 调用前自描述：命令树 / 信封 / 退出码 / 认证）")
+  .action(() =>
+    run(async () => ({
+      cli: "lawlink",
+      version: "0.0.0",
+      output: {
+        default: 'envelope: success {"ok":true,"data":…} | error {"ok":false,"error":{code,message,http}} on stdout',
+        raw: "--raw → bare data on stdout (success), {error} on stderr (failure)",
+      },
+      errorCodes: Object.keys(HTTP),
+      exitCodes: { success: 0, ...EXIT },
+      auth: "get a token via `auth login`; pass it with --token or env LAWLINK_TOKEN. Without it, local mode uses an env-stub identity (LAWLINK_USER_ID/LAWLINK_ROLE).",
+      remote: `add --remote (or LAWLINK_REMOTE=1) to call the deployed API instead of local libSQL; --api-url or LAWLINK_API_URL overrides the base (default ${DEFAULT_REMOTE}).`,
+      commands: (describe(program) as { commands: unknown[] }).commands,
+    })),
+  );
+
+program.parseAsync(process.argv).catch((err: unknown) => {
+  // commander throws on help/version (exitCode 0 — already printed) and on usage
+  // errors (unknown command, missing/invalid option). Surface usage errors as the
+  // JSON error envelope; let help/version exit cleanly.
+  const ce = err as { exitCode?: number; code?: string; message?: string };
+  if (ce && ce.exitCode === 0) process.exit(0);
+  const e: NormErr = { code: "BAD_USAGE", message: (ce?.message ?? String(err)).replace(/^error:\s*/i, "").trim(), http: 400 };
+  const line = JSON.stringify(rawMode() ? { error: e } : { ok: false, error: e }, null, 2) + "\n";
+  (rawMode() ? process.stderr : process.stdout).write(line);
+  process.exit(EXIT.BAD_USAGE);
+});

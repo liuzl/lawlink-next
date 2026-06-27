@@ -160,13 +160,15 @@ const STATUS: Record<DomainError["code"], 400 | 403 | 404 | 409> = {
 };
 
 function fail(c: Context, err: unknown) {
-  if (err instanceof DomainError) return c.json({ error: err.message }, STATUS[err.code]);
+  // `code` is a stable machine-readable category (alongside the human `error`
+  // message) so CLI/agent callers can branch without parsing the message text.
+  if (err instanceof DomainError) return c.json({ error: err.message, code: err.code }, STATUS[err.code]);
   // Input validation failures are client errors, not server faults.
   if (err instanceof ZodError) {
-    return c.json({ error: err.issues.map((i) => i.message).join("；") }, 400);
+    return c.json({ error: err.issues.map((i) => i.message).join("；"), code: "VALIDATION" }, 400);
   }
   // Other non-domain errors (e.g. missing JWT secret config) are server-side faults.
-  return c.json({ error: err instanceof Error ? err.message : String(err) }, 500);
+  return c.json({ error: err instanceof Error ? err.message : String(err), code: "INTERNAL" }, 500);
 }
 
 type Env = { Bindings: Bindings; Variables: { auth: AuthContext } };

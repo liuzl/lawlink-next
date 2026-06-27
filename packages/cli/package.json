@@ -4,18 +4,23 @@
   "private": true,
   "type": "module",
   "bin": {
-    "lawlink": "./src/index.ts"
+    "lawlink": "./dist/index.cjs"
   },
+  "files": ["dist"],
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "dev": "tsx src/index.ts"
+    "dev": "tsx src/index.ts",
+    "build": "node build.mjs",
+    "prepare": "node build.mjs"
   },
   "dependencies": {
     "@lawlink/core": "workspace:*",
     "@lawlink/db": "workspace:*",
+    "@libsql/client": "^0.14.0",
     "commander": "^13.0.0"
   },
   "devDependencies": {
+    "esbuild": "^0.18.20",
     "tsx": "^4.19.2"
   }
 }
