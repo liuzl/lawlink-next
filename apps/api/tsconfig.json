@@ -1,4 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
-  "include": ["src"]
+  "include": ["src"],
+  // The Node entry (index.ts/server.ts) and the Cloudflare Worker entry
+  // (worker.ts/do.ts) have conflicting ambient globals (Node File vs Workers
+  // File). Keep the Worker files out of the Node program; they are typechecked
+  // by tsconfig.worker.json with @cloudflare/workers-types instead.
+  "exclude": ["src/worker.ts", "src/do.ts"]
 }
