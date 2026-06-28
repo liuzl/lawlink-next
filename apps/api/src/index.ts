@@ -151,8 +151,9 @@ function auditCtx(c: Context): { ip?: string; userAgent?: string } {
   };
 }
 
-const STATUS: Record<DomainError["code"], 400 | 403 | 404 | 409> = {
+const STATUS: Record<DomainError["code"], 400 | 401 | 403 | 404 | 409> = {
   VALIDATION: 400,
+  UNAUTHENTICATED: 401,
   FORBIDDEN: 403,
   NOT_FOUND: 404,
   CONFLICT: 409,

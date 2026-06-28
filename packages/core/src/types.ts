@@ -185,6 +185,7 @@ export interface Clock {
 export class DomainError extends Error {
   constructor(
     public code:
+      | "UNAUTHENTICATED"
       | "FORBIDDEN"
       | "NOT_FOUND"
       | "VALIDATION"

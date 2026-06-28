@@ -164,9 +164,9 @@ function q(params: Record<string, unknown>): string {
 }
 
 /** Stable machine-readable error code → HTTP status (mirrors the API). */
-const HTTP: Record<string, number> = { VALIDATION: 400, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, INVALID_STATE: 409, BAD_USAGE: 400, INTERNAL: 500 };
+const HTTP: Record<string, number> = { VALIDATION: 400, UNAUTHENTICATED: 401, FORBIDDEN: 403, NOT_FOUND: 404, CONFLICT: 409, INVALID_STATE: 409, BAD_USAGE: 400, INTERNAL: 500 };
 /** error code → process exit code, so agents can branch on the exit status alone. */
-const EXIT: Record<string, number> = { VALIDATION: 2, BAD_USAGE: 2, FORBIDDEN: 3, NOT_FOUND: 4, CONFLICT: 5, INVALID_STATE: 5, INTERNAL: 1 };
+const EXIT: Record<string, number> = { VALIDATION: 2, BAD_USAGE: 2, UNAUTHENTICATED: 6, FORBIDDEN: 3, NOT_FOUND: 4, CONFLICT: 5, INVALID_STATE: 5, INTERNAL: 1 };
 
 interface NormErr {
   code: string;

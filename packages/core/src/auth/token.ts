@@ -25,6 +25,6 @@ export async function verifyToken(
     const { payload } = await jwtVerify(token, encoder.encode(secret));
     return { userId: payload.sub as string, role: payload.role as Role };
   } catch {
-    throw new DomainError("FORBIDDEN", "登录态无效或已过期");
+    throw new DomainError("UNAUTHENTICATED", "登录态无效或已过期");
   }
 }

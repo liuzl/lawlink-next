@@ -18,6 +18,23 @@ export function setSession(token: string | null, role?: string): void {
   }
 }
 
+/**
+ * Session expiry guard. A 401 means the JWT is missing/expired/invalid — the user
+ * is effectively logged out, so clear the stale session and bounce to /login
+ * (remembering where they were). 403 is NOT handled here: that's a permission
+ * denial on an otherwise-valid session and should surface inline on the page.
+ * Returns true if it redirected, so callers can stop processing the response.
+ */
+function handleAuthFailure(status: number): boolean {
+  if (status !== 401) return false;
+  setSession(null);
+  if (window.location.pathname !== "/login") {
+    const next = window.location.pathname + window.location.search;
+    window.location.assign(`/login?next=${encodeURIComponent(next)}`);
+  }
+  return true;
+}
+
 async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
   const token = getToken();
   const res = await fetch(`/api${path}`, {
@@ -29,7 +46,10 @@ async function req<T>(path: string, opts: RequestInit = {}): Promise<T> {
     },
   });
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  if (!res.ok) {
+    if (handleAuthFailure(res.status)) throw new Error("登录态已失效，正在跳转登录…");
+    throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+  }
   return data as T;
 }
 
@@ -522,7 +542,10 @@ export const api = {
       body: fd,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    if (!res.ok) {
+      if (handleAuthFailure(res.status)) throw new Error("登录态已失效，正在跳转登录…");
+      throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
     return data as { id: string };
   },
   downloadDocument: async (id: string, fallbackName = "download"): Promise<void> => {
@@ -531,6 +554,7 @@ export const api = {
       headers: token ? { authorization: `Bearer ${token}` } : {},
     });
     if (!res.ok) {
+      if (handleAuthFailure(res.status)) throw new Error("登录态已失效，正在跳转登录…");
       const data = await res.json().catch(() => ({}));
       throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
     }
@@ -614,7 +638,10 @@ export const api = {
       body: fd,
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    if (!res.ok) {
+      if (handleAuthFailure(res.status)) throw new Error("登录态已失效，正在跳转登录…");
+      throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
+    }
     return data as { id: string; variables: string[] };
   },
   deleteTemplate: (id: string) => req<{ deleted: boolean }>(`/templates/${id}/delete`, { method: "POST" }),

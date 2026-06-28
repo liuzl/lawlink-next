@@ -1,5 +1,5 @@
 import { useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { Scale } from "lucide-react";
 import { api, setSession } from "@/lib/api";
 import { Button } from "@/components/ui/button";
@@ -9,6 +9,7 @@ import { Label } from "@/components/ui/label";
 
 export function Login() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -21,7 +22,11 @@ export function Login() {
     try {
       const { token, user } = await api.login(email, password);
       setSession(token, user.role);
-      navigate("/");
+      // Return to where the user was bounced from. Only honor internal paths
+      // (single leading slash) to avoid an open-redirect via ?next=//evil.com.
+      const next = searchParams.get("next");
+      const dest = next && /^\/(?!\/)/.test(next) ? next : "/";
+      navigate(dest, { replace: true });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
