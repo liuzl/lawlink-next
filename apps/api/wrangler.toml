@@ -9,6 +9,10 @@ name = "lawlink-next"
 main = "src/index.ts"
 compatibility_date = "2026-03-12"
 compatibility_flags = ["nodejs_compat"]
+# Zhanliangliu@gmail.com's Account — owns the D1 db + lawlink-next Worker. Pinning
+# it here stops non-interactive `wrangler deploy` from failing with "more than one
+# account" when the logged-in user has multiple Cloudflare accounts.
+account_id = "dffc188e7dae090e09d5317bcca83780"
 
 # Built SPA. `run_worker_first` routes /api/* to the Worker; every other path is
 # served from the static build, with client-router paths falling back to the SPA
